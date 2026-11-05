@@ -12,7 +12,7 @@ class SettingController extends Controller
         $settings = [
             'store_name' => Setting::get('store_name', 'Kasir POS'),
             'store_tagline' => Setting::get('store_tagline', 'Solusi Kasir Bisnis'),
-            'store_address' => Setting::get('store_address', 'Jl. Contoh Alamat Toko'),
+            'store_address' => Setting::get('store_address', 'Jl. Alamat Toko'),
             'store_phone' => Setting::get('store_phone', '081234567890'),
             'store_email' => Setting::get('store_email', 'toko@pos.test'),
             'tax_percentage' => Setting::get('tax_percentage', '0'),
