@@ -972,5 +972,48 @@ class DebtSystemTest extends TestCase
         $this->assertEquals('OPERASIONAL GUDANG 20%', $items[2]['name']);
         $this->assertEquals(20, $items[2]['percentage']);
     }
+
+    public function test_member_levels_reseller_and_dapur_validation_and_pricing(): void
+    {
+        $admin = User::where('username', 'admin')->first();
+
+        // 1. Reject platinum when creating customer
+        $this->actingAs($admin)->post(route('customers.store'), [
+            'name' => 'Pelanggan Platinum Lama',
+            'member_level' => 'platinum',
+        ])->assertSessionHasErrors('member_level');
+
+        // 2. Allow reseller and dapur when creating customer
+        $this->actingAs($admin)->post(route('customers.store'), [
+            'name' => 'Mitra Reseller',
+            'member_level' => 'reseller',
+        ])->assertSessionHasNoErrors();
+
+        $this->actingAs($admin)->post(route('customers.store'), [
+            'name' => 'Mitra Dapur',
+            'member_level' => 'dapur',
+        ])->assertSessionHasNoErrors();
+
+        $reseller = Customer::where('name', 'Mitra Reseller')->first();
+        $dapur = Customer::where('name', 'Mitra Dapur')->first();
+        $this->assertEquals('reseller', $reseller->member_level);
+        $this->assertEquals('dapur', $dapur->member_level);
+
+        // 3. Verify Product::getPriceForLevel maps reseller -> price_silver and dapur -> price_gold
+        $product = Product::first();
+        $product->update([
+            'selling_price' => 20000,
+            'price_silver' => 18000,
+            'price_gold' => 16500,
+            'price_platinum' => 15000,
+        ]);
+
+        $this->assertEquals(20000.0, $product->getPriceForLevel('regular'));
+        $this->assertEquals(18000.0, $product->getPriceForLevel('reseller'));
+        $this->assertEquals(16500.0, $product->getPriceForLevel('dapur'));
+        // Platinum should no longer resolve to price_platinum, fallback to selling_price
+        $this->assertEquals(20000.0, $product->getPriceForLevel('platinum'));
+    }
 }
+
 

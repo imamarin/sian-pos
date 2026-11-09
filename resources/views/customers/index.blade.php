@@ -65,14 +65,14 @@
                             <td>{{ $cust->email ?? '-' }}</td>
                             <td class="text-center">
                                 @switch($cust->member_level)
-                                    @case('platinum')
-                                        <span class="badge bg-dark text-white px-3 py-1">Platinum</span>
-                                        @break
+                                    @case('dapur')
                                     @case('gold')
-                                        <span class="badge bg-warning text-dark px-3 py-1">Gold</span>
+                                    @case('platinum')
+                                        <span class="badge bg-warning text-dark px-3 py-1">Dapur</span>
                                         @break
+                                    @case('reseller')
                                     @case('silver')
-                                        <span class="badge bg-secondary text-white px-3 py-1">Silver</span>
+                                        <span class="badge bg-secondary text-white px-3 py-1">Reseller</span>
                                         @break
                                     @default
                                         <span class="badge bg-light text-dark border px-3 py-1">Regular</span>
@@ -129,9 +129,8 @@
                                                             <label class="form-label small fw-semibold">Level Member</label>
                                                             <select name="member_level" class="form-select">
                                                                 <option value="regular" {{ $cust->member_level === 'regular' ? 'selected' : '' }}>Regular</option>
-                                                                <option value="silver" {{ $cust->member_level === 'silver' ? 'selected' : '' }}>Silver</option>
-                                                                <option value="gold" {{ $cust->member_level === 'gold' ? 'selected' : '' }}>Gold</option>
-                                                                <option value="platinum" {{ $cust->member_level === 'platinum' ? 'selected' : '' }}>Platinum</option>
+                                                                <option value="reseller" {{ in_array($cust->member_level, ['reseller', 'silver']) ? 'selected' : '' }}>Reseller</option>
+                                                                <option value="dapur" {{ in_array($cust->member_level, ['dapur', 'gold', 'platinum']) ? 'selected' : '' }}>Dapur</option>
                                                             </select>
                                                         </div>
                                                     </div>
@@ -194,9 +193,8 @@
                             <label class="form-label small fw-semibold">Level Member</label>
                             <select name="member_level" class="form-select">
                                 <option value="regular">Regular</option>
-                                <option value="silver">Silver</option>
-                                <option value="gold">Gold</option>
-                                <option value="platinum">Platinum</option>
+                                <option value="reseller">Reseller</option>
+                                <option value="dapur">Dapur</option>
                             </select>
                         </div>
                     </div>

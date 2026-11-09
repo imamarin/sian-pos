@@ -53,14 +53,11 @@ class Product extends Model
     public function getPriceForLevel(?string $level): float
     {
         $normalized = strtolower(trim((string) $level));
-        if ($normalized === 'silver' && !is_null($this->price_silver) && (float) $this->price_silver > 0) {
+        if (in_array($normalized, ['reseller', 'silver'], true) && !is_null($this->price_silver) && (float) $this->price_silver > 0) {
             return (float) $this->price_silver;
         }
-        if ($normalized === 'gold' && !is_null($this->price_gold) && (float) $this->price_gold > 0) {
+        if (in_array($normalized, ['dapur', 'gold'], true) && !is_null($this->price_gold) && (float) $this->price_gold > 0) {
             return (float) $this->price_gold;
-        }
-        if ($normalized === 'platinum' && !is_null($this->price_platinum) && (float) $this->price_platinum > 0) {
-            return (float) $this->price_platinum;
         }
         return (float) $this->selling_price;
     }

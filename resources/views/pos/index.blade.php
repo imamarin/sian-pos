@@ -1234,14 +1234,11 @@
     function getProductPriceForLevel(p, level = '') {
         if (!p) return 0;
         const lvl = (level || (typeof selectedCustomerLevel !== 'undefined' ? selectedCustomerLevel : 'regular')).toLowerCase();
-        if (lvl === 'silver' && p.price_silver && parseFloat(p.price_silver) > 0) {
+        if ((lvl === 'reseller' || lvl === 'silver') && p.price_silver && parseFloat(p.price_silver) > 0) {
             return parseFloat(p.price_silver);
         }
-        if (lvl === 'gold' && p.price_gold && parseFloat(p.price_gold) > 0) {
+        if ((lvl === 'dapur' || lvl === 'gold') && p.price_gold && parseFloat(p.price_gold) > 0) {
             return parseFloat(p.price_gold);
-        }
-        if (lvl === 'platinum' && p.price_platinum && parseFloat(p.price_platinum) > 0) {
-            return parseFloat(p.price_platinum);
         }
         return parseFloat(p.selling_price) || 0;
     }
@@ -2128,9 +2125,10 @@
     function getMemberBadgeClass(level) {
         switch((level || '').toLowerCase()) {
             case 'vip': return 'bg-dark text-warning border border-warning';
-            case 'platinum': return 'bg-info-subtle text-info border border-info';
+            case 'dapur':
             case 'gold': return 'bg-warning-subtle text-warning-emphasis border border-warning';
-            case 'silver': return 'bg-secondary-subtle text-secondary border border-secondary';
+            case 'reseller':
+            case 'silver': return 'bg-info-subtle text-info border border-info';
             default: return 'bg-primary-subtle text-primary';
         }
     }

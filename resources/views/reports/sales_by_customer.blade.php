@@ -155,7 +155,7 @@
                                             @endif
                                         </div>
                                     </div>
-                                    <span class="badge {{ in_array($c->member_level, ['gold', 'platinum']) ? 'bg-warning-subtle text-warning' : 'bg-primary-subtle text-primary' }}" style="font-size: 0.65rem; text-transform: capitalize;">
+                                    <span class="badge {{ in_array($c->member_level, ['dapur', 'gold']) ? 'bg-warning-subtle text-warning' : ($c->member_level === 'reseller' ? 'bg-info-subtle text-info' : 'bg-primary-subtle text-primary') }}" style="font-size: 0.65rem; text-transform: capitalize;">
                                         {{ $c->member_level }}
                                     </span>
                                 </a>

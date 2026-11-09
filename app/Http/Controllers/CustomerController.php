@@ -31,7 +31,7 @@ class CustomerController extends Controller
             'phone' => ['nullable', 'string', 'max:50'],
             'email' => ['nullable', 'email', 'max:255'],
             'address' => ['nullable', 'string'],
-            'member_level' => ['nullable', 'string', 'in:regular,silver,gold,platinum'],
+            'member_level' => ['nullable', 'string', 'in:regular,reseller,dapur'],
         ]);
 
         $nextId = (Customer::max('id') ?? 0) + 1;
@@ -60,7 +60,7 @@ class CustomerController extends Controller
             'phone' => ['nullable', 'string', 'max:50'],
             'email' => ['nullable', 'email', 'max:255'],
             'address' => ['nullable', 'string'],
-            'member_level' => ['required', 'string', 'in:regular,silver,gold,platinum'],
+            'member_level' => ['required', 'string', 'in:regular,reseller,dapur'],
             'status' => ['nullable', 'boolean'],
         ]);
 

@@ -210,7 +210,7 @@ class DatabaseSeeder extends Seeder
             'phone' => '081298765432',
             'email' => 'fauzi@gmail.com',
             'address' => 'Jl. Mawar No. 14, Sukasenang',
-            'member_level' => 'gold',
+            'member_level' => 'dapur',
             'points' => 150,
             'status' => true,
         ]);
@@ -221,7 +221,7 @@ class DatabaseSeeder extends Seeder
             'phone' => '085712345678',
             'email' => 'siti.nur@gmail.com',
             'address' => 'Jl. Anggrek No. 8, Ciawi',
-            'member_level' => 'silver',
+            'member_level' => 'reseller',
             'points' => 50,
             'status' => true,
         ]);

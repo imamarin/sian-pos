@@ -91,9 +91,9 @@
                             </div>
                         </div>
                         <div class="row g-2 pt-1">
-                            <div class="col-12 col-md-4">
+                            <div class="col-12 col-md-6">
                                 <label class="form-label small fw-semibold text-secondary mb-1">
-                                    <span class="badge bg-secondary-subtle text-secondary me-1">Silver</span> Harga Silver
+                                    <span class="badge bg-secondary-subtle text-secondary me-1">Reseller</span> Harga Reseller
                                 </label>
                                 <div class="input-group">
                                     <span class="input-group-text bg-white">Rp</span>
@@ -101,25 +101,15 @@
                                 </div>
                                 @error('price_silver') <div class="invalid-feedback d-block">{{ $message }}</div> @enderror
                             </div>
-                            <div class="col-12 col-md-4">
+                            <div class="col-12 col-md-6">
                                 <label class="form-label small fw-semibold text-warning mb-1">
-                                    <span class="badge bg-warning-subtle text-warning me-1">Gold</span> Harga Gold
+                                    <span class="badge bg-warning-subtle text-warning me-1">Dapur</span> Harga Dapur
                                 </label>
                                 <div class="input-group">
                                     <span class="input-group-text bg-white">Rp</span>
                                     <input type="text" inputmode="numeric" name="price_gold" class="form-control input-rupiah @error('price_gold') is-invalid @enderror" value="{{ old('price_gold') }}" placeholder="Ikut harga normal">
                                 </div>
                                 @error('price_gold') <div class="invalid-feedback d-block">{{ $message }}</div> @enderror
-                            </div>
-                            <div class="col-12 col-md-4">
-                                <label class="form-label small fw-semibold text-info mb-1">
-                                    <span class="badge bg-info-subtle text-info me-1">Platinum</span> Harga Platinum
-                                </label>
-                                <div class="input-group">
-                                    <span class="input-group-text bg-white">Rp</span>
-                                    <input type="text" inputmode="numeric" name="price_platinum" class="form-control input-rupiah @error('price_platinum') is-invalid @enderror" value="{{ old('price_platinum') }}" placeholder="Ikut harga normal">
-                                </div>
-                                @error('price_platinum') <div class="invalid-feedback d-block">{{ $message }}</div> @enderror
                             </div>
                         </div>
                     </div>
