@@ -30,7 +30,7 @@
             <label for="username" class="form-label small fw-semibold text-secondary">Username atau Email</label>
             <div class="input-group">
                 <span class="input-group-text bg-light border-end-0 text-muted"><i class="bi bi-person"></i></span>
-                <input type="text" name="username" id="username" class="form-control border-start-0" value="{{ old('username', 'admin') }}" placeholder="admin / kasir" required autofocus>
+                <input type="text" name="username" id="username" class="form-control border-start-0" value="{{ old('username', '') }}" placeholder="admin / kasir" required autofocus>
             </div>
         </div>
 
@@ -40,7 +40,7 @@
             </div>
             <div class="input-group mt-1">
                 <span class="input-group-text bg-light border-end-0 text-muted"><i class="bi bi-shield-lock"></i></span>
-                <input type="password" name="password" id="password" class="form-control border-start-0" value="password" placeholder="••••••••" required>
+                <input type="password" name="password" id="password" class="form-control border-start-0" value="password" placeholder="" required>
             </div>
         </div>
 
@@ -55,18 +55,6 @@
             <i class="bi bi-box-arrow-in-right me-1"></i> Masuk ke Sistem
         </button>
     </form>
-
-    <div class="border-top pt-3 mt-3 text-center">
-        <small class="text-muted d-block mb-2">Akun Default Demo:</small>
-        <div class="d-flex gap-2 justify-content-center">
-            <button type="button" class="btn btn-sm btn-outline-primary rounded-pill px-3" onclick="fillLogin('admin', 'password')">
-                <i class="bi bi-person-fill-gear me-1"></i> Super Admin
-            </button>
-            <button type="button" class="btn btn-sm btn-outline-success rounded-pill px-3" onclick="fillLogin('kasir', 'password')">
-                <i class="bi bi-calculator me-1"></i> Kasir
-            </button>
-        </div>
-    </div>
 </div>
 
 <script>
