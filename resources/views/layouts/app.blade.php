@@ -294,7 +294,7 @@
             .top-navbar,
             .btn,
             button,
-            form,
+            form:not(.printable-form),
             .card-filter,
             .filter-card,
             .no-print,
@@ -412,6 +412,10 @@
 
             .d-print-block {
                 display: block !important;
+            }
+
+            .d-print-inline {
+                display: inline !important;
             }
 
             .d-print-table {

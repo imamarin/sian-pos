@@ -444,6 +444,28 @@
                                         <i class="bi bi-journal-bookmark-fill d-block fs-4 mb-1"></i> Hutang / Tempo
                                     </label>
                                 </div>
+                                <div class="col-12">
+                                    <input type="radio" class="btn-check" name="payment_method" id="paySplit" value="split" onchange="handlePaymentMethodChange('split')">
+                                    <label class="btn btn-outline-dark w-100 py-2 fw-bold rounded-3 d-flex align-items-center justify-content-center gap-2" for="paySplit">
+                                        <i class="bi bi-layers-half fs-5"></i> Split / Pembayaran Campuran (Misal: Cash + Transfer / QRIS)
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Panel Khusus Split Payment (Multi-Metode) -->
+                        <div id="splitFieldsContainer" class="mb-3 p-3 rounded-3 border border-primary-subtle bg-primary-subtle bg-opacity-10 d-none">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <div class="small fw-bold text-primary">
+                                    <i class="bi bi-layers-half me-1"></i> Rincian Pembayaran Campuran (Split Payment)
+                                </div>
+                                <button type="button" class="btn btn-primary btn-sm py-0 px-2 rounded-pill" style="font-size: 0.72rem;" onclick="addSplitPaymentRow()">
+                                    <i class="bi bi-plus-lg"></i> Tambah Metode
+                                </button>
+                            </div>
+                            <div id="splitPaymentRows" class="d-flex flex-column gap-2"></div>
+                            <div class="small text-muted mt-2" style="font-size: 0.72rem;">
+                                <i class="bi bi-info-circle me-1"></i> Ketik nominal di Metode 1, maka Metode 2 otomatis menghitung sisa tagihan.
                             </div>
                         </div>
 
@@ -516,6 +538,17 @@
                             <div class="input-group">
                                 <span class="input-group-text bg-light text-muted fw-semibold">Rp</span>
                                 <input type="text" inputmode="numeric" id="inputShippingCost" class="form-control fw-bold text-end input-rupiah" placeholder="0" value="0" oninput="calcChange()">
+                            </div>
+                            <div id="shippingDrawerOptionContainer" class="mt-2 p-2 rounded-3 bg-warning-subtle border border-warning-subtle d-none">
+                                <div class="form-check mb-0">
+                                    <input class="form-check-input" type="checkbox" id="chkShippingFromDrawer" checked>
+                                    <label class="form-check-label small fw-semibold text-dark" for="chkShippingFromDrawer">
+                                        <i class="bi bi-box-arrow-up-right text-danger me-1"></i> Bayar ongkir ke kurir menggunakan Uang Tunai Laci Kasir
+                                    </label>
+                                </div>
+                                <div class="small text-muted ps-4" style="font-size: 0.7rem;">
+                                    Saldo uang fisik di laci kasir otomatis dikurangi sebesar nominal ongkir ini saat Tutup Shift.
+                                </div>
                             </div>
                             <div class="form-text small text-muted" style="font-size: 0.72rem;">
                                 *Ongkir dicatat terpisah & tidak dihitung sebagai omset penjualan barang.
@@ -1516,13 +1549,22 @@
         document.getElementById('modalPaidTotal').innerText = 'Rp ' + new Intl.NumberFormat('id-ID').format(totalWithShipping);
         document.getElementById('modalChangeAmount').innerText = 'Rp 0';
 
-        calcChange();
+        const activeMethod = document.querySelector('input[name="payment_method"]:checked')?.value || 'cash';
+        handlePaymentMethodChange(activeMethod);
 
         checkoutModal.show();
         setTimeout(() => {
-            const input = document.getElementById('inputPaidAmount');
-            input.focus();
-            input.select();
+            if (activeMethod === 'split') {
+                const firstSplitInput = document.getElementById('splitAmountInput_0');
+                if (firstSplitInput) {
+                    firstSplitInput.focus();
+                    firstSplitInput.select();
+                }
+            } else {
+                const input = document.getElementById('inputPaidAmount');
+                input.focus();
+                input.select();
+            }
         }, 400);
     }
 
@@ -1552,12 +1594,158 @@
         }
     }
 
-    function handlePaymentMethodChange(method) {
-        const quickCash = document.getElementById('quickCashContainer');
-        const debtFields = document.getElementById('debtFieldsContainer');
+    let splitPaymentsState = [];
+
+    function initDefaultSplitRows(totalAmount) {
+        splitPaymentsState = [
+            { method: 'cash', amount: 0 },
+            { method: 'transfer', amount: totalAmount }
+        ];
+        renderSplitPaymentRows();
+    }
+
+    function renderSplitPaymentRows() {
+        const container = document.getElementById('splitPaymentRows');
+        if (!container) return;
+
+        let html = '';
+        splitPaymentsState.forEach((row, idx) => {
+            const formattedAmt = formatRupiahString(row.amount || 0);
+            html += `
+                <div class="d-flex align-items-center gap-2 bg-white p-2 rounded-3 border shadow-xs">
+                    <span class="badge bg-secondary-subtle text-secondary">${idx + 1}</span>
+                    <select class="form-select form-select-sm fw-semibold" style="width: 145px;" onchange="updateSplitRowMethod(${idx}, this.value)">
+                        <option value="cash" ${row.method === 'cash' ? 'selected' : ''}>Tunai (Cash)</option>
+                        <option value="transfer" ${row.method === 'transfer' ? 'selected' : ''}>Transfer Bank</option>
+                        <option value="qris" ${row.method === 'qris' ? 'selected' : ''}>QRIS</option>
+                        <option value="debit" ${row.method === 'debit' ? 'selected' : ''}>Kartu Debit</option>
+                        <option value="credit" ${row.method === 'credit' ? 'selected' : ''}>Kartu Kredit</option>
+                    </select>
+                    <div class="input-group input-group-sm flex-grow-1">
+                        <span class="input-group-text bg-light text-muted">Rp</span>
+                        <input type="text" inputmode="numeric" id="splitAmountInput_${idx}" class="form-control fw-bold text-end input-rupiah" value="${formattedAmt}" oninput="handleSplitAmountInput(${idx}, this)">
+                        <button type="button" class="btn btn-outline-secondary" onclick="fillRemainingSplit(${idx})" title="Isi otomatis sisa tagihan ke baris ini">Sisa</button>
+                    </div>
+                    ${splitPaymentsState.length > 2 ? `
+                        <button type="button" class="btn btn-sm text-danger p-0 px-1" onclick="removeSplitPaymentRow(${idx})" title="Hapus metode ini">
+                            <i class="bi bi-x-circle-fill"></i>
+                        </button>
+                    ` : ''}
+                </div>
+            `;
+        });
+
+        container.innerHTML = html;
+        container.querySelectorAll('.input-rupiah').forEach(el => attachRupiahFormatter(el));
+        syncSplitTotalToPaidInput();
+    }
+
+    function updateSplitRowMethod(idx, method) {
+        if (splitPaymentsState[idx]) {
+            splitPaymentsState[idx].method = method;
+        }
+    }
+
+    function handleSplitAmountInput(idx, inputEl) {
+        const raw = (inputEl.value || '').toString().replace(/\./g, '');
+        const val = parseFloat(raw) || 0;
+        if (splitPaymentsState[idx]) {
+            splitPaymentsState[idx].amount = val;
+        }
+
         const rawShipping = (document.getElementById('inputShippingCost').value || '').toString().replace(/\./g, '');
         const shippingCost = parseFloat(rawShipping) || 0;
         const totalWithShipping = Math.round(currentGrandTotal + shippingCost);
+
+        // Jika ada 2 baris dan kasir mengetik di baris pertama (idx === 0), otomatis hitung sisa di baris kedua
+        if (splitPaymentsState.length === 2 && idx === 0) {
+            const remainder = Math.max(0, totalWithShipping - val);
+            splitPaymentsState[1].amount = remainder;
+            const secondInput = document.getElementById('splitAmountInput_1');
+            if (secondInput) {
+                secondInput.value = formatRupiahString(remainder);
+            }
+        }
+
+        syncSplitTotalToPaidInput();
+    }
+
+    function fillRemainingSplit(idx) {
+        const rawShipping = (document.getElementById('inputShippingCost').value || '').toString().replace(/\./g, '');
+        const shippingCost = parseFloat(rawShipping) || 0;
+        const totalWithShipping = Math.round(currentGrandTotal + shippingCost);
+
+        let otherSum = 0;
+        splitPaymentsState.forEach((r, i) => {
+            if (i !== idx) otherSum += (parseFloat(r.amount) || 0);
+        });
+
+        const remainder = Math.max(0, totalWithShipping - otherSum);
+        if (splitPaymentsState[idx]) {
+            splitPaymentsState[idx].amount = remainder;
+        }
+        renderSplitPaymentRows();
+    }
+
+    function addSplitPaymentRow() {
+        const usedMethods = splitPaymentsState.map(r => r.method);
+        const candidates = ['qris', 'transfer', 'cash', 'debit', 'credit'];
+        const nextMethod = candidates.find(m => !usedMethods.includes(m)) || 'qris';
+
+        const rawShipping = (document.getElementById('inputShippingCost').value || '').toString().replace(/\./g, '');
+        const shippingCost = parseFloat(rawShipping) || 0;
+        const totalWithShipping = Math.round(currentGrandTotal + shippingCost);
+        const currentSum = splitPaymentsState.reduce((acc, r) => acc + (parseFloat(r.amount) || 0), 0);
+
+        splitPaymentsState.push({
+            method: nextMethod,
+            amount: Math.max(0, totalWithShipping - currentSum)
+        });
+        renderSplitPaymentRows();
+    }
+
+    function removeSplitPaymentRow(idx) {
+        if (splitPaymentsState.length <= 2) return;
+        splitPaymentsState.splice(idx, 1);
+        renderSplitPaymentRows();
+    }
+
+    function syncSplitTotalToPaidInput() {
+        const totalSplit = splitPaymentsState.reduce((acc, r) => acc + (parseFloat(r.amount) || 0), 0);
+        const paidInput = document.getElementById('inputPaidAmount');
+        if (paidInput) {
+            paidInput.value = formatRupiahString(totalSplit);
+        }
+        calcChange();
+    }
+
+    function handlePaymentMethodChange(method) {
+        const quickCash = document.getElementById('quickCashContainer');
+        const debtFields = document.getElementById('debtFieldsContainer');
+        const splitFields = document.getElementById('splitFieldsContainer');
+        const paidInput = document.getElementById('inputPaidAmount');
+        const rawShipping = (document.getElementById('inputShippingCost').value || '').toString().replace(/\./g, '');
+        const shippingCost = parseFloat(rawShipping) || 0;
+        const totalWithShipping = Math.round(currentGrandTotal + shippingCost);
+
+        if (method === 'split') {
+            quickCash.style.display = 'none';
+            if (debtFields) debtFields.classList.add('d-none');
+            if (splitFields) splitFields.classList.remove('d-none');
+            if (paidInput) paidInput.readOnly = true;
+            initDefaultSplitRows(totalWithShipping);
+            setTimeout(() => {
+                const firstSplitInput = document.getElementById('splitAmountInput_0');
+                if (firstSplitInput) {
+                    firstSplitInput.focus();
+                    firstSplitInput.select();
+                }
+            }, 100);
+            return;
+        }
+
+        if (splitFields) splitFields.classList.add('d-none');
+        if (paidInput) paidInput.readOnly = false;
 
         if (method === 'cash') {
             quickCash.style.display = 'block';
@@ -1601,11 +1789,14 @@
         // Update shipping summary row in modal
         const shipRow = document.getElementById('modalShippingRow');
         const shipText = document.getElementById('modalShippingText');
+        const shipDrawerBox = document.getElementById('shippingDrawerOptionContainer');
         if (shippingCost > 0) {
             shipRow.classList.remove('d-none');
             shipText.innerText = '+Rp ' + new Intl.NumberFormat('id-ID').format(shippingCost);
+            if (shipDrawerBox) shipDrawerBox.classList.remove('d-none');
         } else {
             shipRow.classList.add('d-none');
+            if (shipDrawerBox) shipDrawerBox.classList.add('d-none');
         }
 
         document.getElementById('modalGrandTotal').innerText = 'Rp ' + new Intl.NumberFormat('id-ID').format(totalWithShipping);
@@ -1643,15 +1834,23 @@
         } else {
             const dpMethodContainer = document.getElementById('dpPaymentMethodContainer');
             if (dpMethodContainer) dpMethodContainer.classList.add('d-none');
-            if (changeLabel) changeLabel.innerText = 'Kembalian:';
-            document.getElementById('modalChangeAmount').innerText = 'Rp ' + new Intl.NumberFormat('id-ID').format(Math.max(0, change));
 
-            if (selectedMethod === 'cash' && change < 0) {
-                btnSubmit.disabled = true;
+            if (selectedMethod === 'split' && change < 0) {
+                if (changeLabel) changeLabel.innerText = 'Kurang Bayar:';
+                document.getElementById('modalChangeAmount').innerText = 'Rp ' + new Intl.NumberFormat('id-ID').format(Math.abs(change));
                 document.getElementById('modalChangeAmount').className = 'fw-bold fs-4 text-danger';
+                btnSubmit.disabled = true;
             } else {
-                btnSubmit.disabled = false;
-                document.getElementById('modalChangeAmount').className = 'fw-bold fs-4 text-success';
+                if (changeLabel) changeLabel.innerText = 'Kembalian:';
+                document.getElementById('modalChangeAmount').innerText = 'Rp ' + new Intl.NumberFormat('id-ID').format(Math.max(0, change));
+
+                if ((selectedMethod === 'cash' || selectedMethod === 'split') && change < 0) {
+                    btnSubmit.disabled = true;
+                    document.getElementById('modalChangeAmount').className = 'fw-bold fs-4 text-danger';
+                } else {
+                    btnSubmit.disabled = false;
+                    document.getElementById('modalChangeAmount').className = 'fw-bold fs-4 text-success';
+                }
             }
         }
     }
@@ -1677,6 +1876,19 @@
             return;
         }
 
+        if (paymentMethod === 'split') {
+            const validSplits = splitPaymentsState.filter(r => (parseFloat(r.amount) || 0) > 0);
+            if (validSplits.length === 0) {
+                alert('Silakan isi nominal pembayaran pada metode Split Payment.');
+                return;
+            }
+            const splitSum = validSplits.reduce((acc, r) => acc + (parseFloat(r.amount) || 0), 0);
+            if (splitSum < totalWithShipping) {
+                alert('Total pembayaran campuran masih kurang dari Total Tagihan.');
+                return;
+            }
+        }
+
         const rawDiscVal = (document.getElementById('inputDiscount').value || '').toString().replace(/\./g, '');
         const payload = {
             items: cart.map(i => ({
@@ -1691,8 +1903,12 @@
             discount_value: parseFloat(rawDiscVal) || 0,
             tax_percentage: parseFloat(document.getElementById('inputTax').value) || 0,
             shipping_cost: shippingCost,
+            shipping_paid_from_drawer: shippingCost > 0 ? Boolean(document.getElementById('chkShippingFromDrawer')?.checked) : false,
             paid_amount: paidAmount,
             payment_method: paymentMethod,
+            split_payments: paymentMethod === 'split'
+                ? splitPaymentsState.filter(r => (parseFloat(r.amount) || 0) > 0)
+                : null,
             dp_payment_method: (paymentMethod === 'debt' && paidAmount > 0)
                 ? (document.querySelector('input[name="dp_payment_method"]:checked')?.value || 'cash')
                 : null,

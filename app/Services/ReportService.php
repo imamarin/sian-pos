@@ -8,6 +8,7 @@ use App\Models\Purchase;
 use App\Models\ReceivablePayment;
 use App\Models\Sale;
 use App\Models\SaleDetail;
+use App\Models\SalePayment;
 use App\Models\SaleReturn;
 use App\Models\SaleReturnDetail;
 use Carbon\Carbon;
@@ -61,7 +62,7 @@ class ReportService
         $userId = !empty($userId) ? (int) $userId : null;
         $customerId = !empty($customerId) ? (int) $customerId : null;
 
-        $query = Sale::with(['user', 'customer', 'details', 'returns'])
+        $query = Sale::with(['user', 'customer', 'details', 'returns', 'payments'])
             ->whereBetween('transaction_date', [$start, $end])
             ->where('status', 'completed');
 
@@ -143,8 +144,8 @@ class ReportService
         $netGrandTotal = max(0.0, $totalGrandTotal - $totalReturns);
         $totalCogs = max(0.0, $grossCogs - $returnedCogs);
 
-        // Gross Profit from products = Product Revenue - HPP
-        $grossProfit = $totalProductRevenue - $totalCogs;
+        // Product Margin before Operating Expenses & Shrinkage
+        $productGrossProfit = $totalProductRevenue - $totalCogs;
 
         // Operating Expenses (Cash out transactions categorized as expense/other)
         $expenses = (float) CashTransaction::whereBetween('transaction_date', [$start, $end])
@@ -152,8 +153,17 @@ class ReportService
             ->whereIn('category', ['expense', 'other'])
             ->sum('amount');
 
-        // Net Profit = Gross Profit - Operating Expenses
-        $netProfit = $grossProfit - $expenses;
+        // Stock Shrinkage / Loss (Penyusutan & Kerugian Stok dari Opname / Penyesuaian Keluar)
+        $shrinkageReport = $this->getStockShrinkageReport($start, $end);
+        $stockShrinkage = (float) ($shrinkageReport['summary']['total_loss'] ?? 0.0);
+        $stockShrinkageItems = (float) ($shrinkageReport['summary']['total_items'] ?? 0.0);
+        $stockShrinkageEvents = (int) ($shrinkageReport['summary']['total_events'] ?? 0);
+
+        $totalExpensesAndShrinkage = $expenses + $stockShrinkage;
+
+        // Opsi A: Laba Kotor (Gross Profit) = Pendapatan Bersih - HPP - Beban Operasional & Penyusutan
+        $grossProfit = $productGrossProfit - $totalExpensesAndShrinkage;
+        $netProfit = $grossProfit;
 
         return [
             'total_revenue' => $totalProductRevenue,
@@ -166,8 +176,13 @@ class ReportService
             'gross_cogs' => $grossCogs,
             'returned_cogs' => $returnedCogs,
             'total_cogs' => $totalCogs,
+            'product_gross_profit' => $productGrossProfit,
             'gross_profit' => $grossProfit,
             'expenses' => $expenses,
+            'stock_shrinkage' => $stockShrinkage,
+            'stock_shrinkage_items' => $stockShrinkageItems,
+            'stock_shrinkage_events' => $stockShrinkageEvents,
+            'total_expenses_and_shrinkage' => $totalExpensesAndShrinkage,
             'net_profit' => $netProfit,
         ];
     }
@@ -592,16 +607,47 @@ class ReportService
      */
     public function getCashAndBankFinanceReport(Carbon $start, Carbon $end): array
     {
-        // 1. Sales grouped by payment method
+        // 1. Sales grouped by payment method (excluding split, which is broken down via SalePayment)
         $salesByMethod = Sale::select(
                 'payment_method',
                 DB::raw('COUNT(id) as total_transactions'),
                 DB::raw('SUM(grand_total) as total_amount')
             )
             ->where('status', 'completed')
+            ->where('payment_method', '!=', 'split')
             ->whereBetween('transaction_date', [$start, $end])
             ->groupBy('payment_method')
+            ->get()
+            ->keyBy('payment_method');
+
+        $splitPaymentsByMethod = SalePayment::select(
+                'sale_payments.payment_method',
+                DB::raw('COUNT(DISTINCT sale_payments.sale_id) as total_transactions'),
+                DB::raw('SUM(sale_payments.amount) as total_amount')
+            )
+            ->join('sales', 'sales.id', '=', 'sale_payments.sale_id')
+            ->where('sales.status', 'completed')
+            ->where('sales.payment_method', 'split')
+            ->whereBetween('sales.transaction_date', [$start, $end])
+            ->groupBy('sale_payments.payment_method')
             ->get();
+
+        foreach ($splitPaymentsByMethod as $spRow) {
+            $method = $spRow->payment_method;
+            if ($salesByMethod->has($method)) {
+                $existing = $salesByMethod->get($method);
+                $existing->total_transactions = (int) $existing->total_transactions + (int) $spRow->total_transactions;
+                $existing->total_amount = (float) $existing->total_amount + (float) $spRow->total_amount;
+            } else {
+                $salesByMethod->put($method, (object) [
+                    'payment_method' => $method,
+                    'total_transactions' => (int) $spRow->total_transactions,
+                    'total_amount' => (float) $spRow->total_amount,
+                ]);
+            }
+        }
+
+        $salesByMethod = $salesByMethod->values();
 
         $cashSales = (float) ($salesByMethod->where('payment_method', 'cash')->first()?->total_amount ?? 0);
         $transferSales = (float) ($salesByMethod->where('payment_method', 'transfer')->first()?->total_amount ?? 0);
@@ -739,7 +785,7 @@ class ReportService
      */
     public function getIncomeReport(Carbon $start, Carbon $end): array
     {
-        $sales = Sale::with(['details', 'returns.details', 'paymentAllocations.receivablePayment'])
+        $sales = Sale::with(['details', 'returns.details', 'paymentAllocations.receivablePayment', 'payments'])
             ->where('status', 'completed')
             ->whereBetween('transaction_date', [$start, $end])
             ->orderBy('transaction_date', 'asc')
@@ -780,7 +826,7 @@ class ReportService
         };
 
         $addPaymentByMethod = function (string $dateKey, string $method, float $amount) use (&$dailyMap) {
-            if ($amount <= 0) {
+            if ($amount == 0) {
                 return;
             }
             $method = strtolower($method);
@@ -794,11 +840,22 @@ class ReportService
             }
         };
 
+        // Ambil daftar CashTransaction kategori 'shipping' (ongkir yang dibayar dari laci kasir)
+        $shippingDrawerMap = CashTransaction::query()
+            ->where('type', 'out')
+            ->where('category', 'shipping')
+            ->where('reference_type', Sale::class)
+            ->whereIn('reference_id', $sales->pluck('id'))
+            ->pluck('amount', 'reference_id');
+
         foreach ($sales as $sale) {
             $dateKey = $sale->transaction_date->format('Y-m-d');
             $initDay($dateKey);
 
             $grandTotal = (float) $sale->grand_total;
+            $shippingCost = (float) $sale->shipping_cost;
+            $productGrossTotal = max(0.0, $grandTotal - $shippingCost);
+
             $saleModal = 0.0;
             foreach ($sale->details as $detail) {
                 $saleModal += ((float) $detail->qty * (float) $detail->cost_price);
@@ -819,12 +876,20 @@ class ReportService
                 }
             }
 
+            // Opsi 1: PENJUALAN murni nilai barang bersih (tanpa ongkir)
+            $netProductSales = max(0.0, $productGrossTotal - $returnedRevenue);
             $netGrandTotal = max(0.0, $grandTotal - $returnedRevenue);
             $netSaleModal = max(0.0, $saleModal - $returnedModal);
 
             $dailyMap[$dateKey]['total_transactions'] += 1;
-            $dailyMap[$dateKey]['penjualan'] += $netGrandTotal;
+            $dailyMap[$dateKey]['penjualan'] += $netProductSales;
             $dailyMap[$dateKey]['modal'] += $netSaleModal;
+
+            $shippingFromDrawer = (float) ($shippingDrawerMap[$sale->id] ?? 0.0);
+            // Jika ada ongkir tapi tidak diambil dari laci kasir, maka yang masuk ke pembayaran toko hanya senilai produk
+            $effectiveCustomerTarget = ($shippingCost > 0 && $shippingFromDrawer <= 0)
+                ? $netProductSales
+                : $netGrandTotal;
 
             if ($sale->payment_method === 'debt') {
                 // Hitung alokasi pasca-checkout (cicilan lanjutan & potongan retur)
@@ -852,8 +917,21 @@ class ReportService
                     $dpMethod = $sale->dp_payment_method ?? 'cash';
                     $addPaymentByMethod($dateKey, $dpMethod, $netInitialDp);
                 }
+            } elseif ($sale->payment_method === 'split' && $sale->payments->isNotEmpty()) {
+                $totalSplitNet = (float) $sale->payments->sum('amount');
+                $scaleRatio = ($totalSplitNet > 0 && $grandTotal > 0) ? ($effectiveCustomerTarget / $totalSplitNet) : 1.0;
+
+                foreach ($sale->payments as $sp) {
+                    $effectiveAmount = round((float) $sp->amount * $scaleRatio, 2);
+                    $addPaymentByMethod($dateKey, $sp->payment_method ?? 'cash', $effectiveAmount);
+                }
             } else {
-                $addPaymentByMethod($dateKey, $sale->payment_method ?? 'cash', $netGrandTotal);
+                $addPaymentByMethod($dateKey, $sale->payment_method ?? 'cash', $effectiveCustomerTarget);
+            }
+
+            // Opsi 1: Jika ongkir diambil tunai dari laci kasir untuk kurir, kurangi kolom CASH sebesar ongkir tersebut
+            if ($shippingFromDrawer > 0) {
+                $dailyMap[$dateKey]['cash'] -= $shippingFromDrawer;
             }
         }
 
@@ -904,6 +982,129 @@ class ReportService
                 'total_laba_kotor' => $totalLabaKotor,
                 'total_debt_repayment' => $totalDebtRepayment,
                 'gross_margin_percentage' => $totalPenjualan > 0 ? ($totalLabaKotor / $totalPenjualan) * 100 : 0,
+            ],
+        ];
+    }
+
+    /**
+     * 8. Get Profit Allocation Report (Laporan Alokasi / Pembagian Laba Kotor).
+     */
+    public static function defaultProfitAllocationItems(): array
+    {
+        return [
+            ['key' => 'sdm', 'label' => 'SDM', 'name' => 'SDM 30%', 'percentage' => 30],
+            ['key' => 'laba_bersih', 'label' => 'LABA BERSIH', 'name' => 'LABA BERSIH 30%', 'percentage' => 30],
+            ['key' => 'manajemen_resiko', 'label' => 'MANAJEMEN RESIKO', 'name' => 'MANAJEMEN RESIKO 10%', 'percentage' => 10],
+            ['key' => 'operasional_gudang', 'label' => 'OPERASIONAL GUDANG', 'name' => 'OPERASIONAL GUDANG 5%', 'percentage' => 5],
+            ['key' => 'transportasi', 'label' => 'TRANSPORTASI', 'name' => 'TRANSPORTASI 5%', 'percentage' => 5],
+            ['key' => 'marketing', 'label' => 'MARKETING', 'name' => 'MARKETING 8%', 'percentage' => 8],
+            ['key' => 'adm', 'label' => 'ADM', 'name' => 'ADM 2%', 'percentage' => 2],
+            ['key' => 'peralatan', 'label' => 'PERALATAN', 'name' => 'PERALATAN 7%', 'percentage' => 7],
+            ['key' => 'pajak', 'label' => 'PAJAK', 'name' => 'PAJAK 3%', 'percentage' => 3],
+        ];
+    }
+
+    public static function getProfitAllocationItems(): array
+    {
+        $rawConfig = \App\Models\Setting::get('profit_allocation_config');
+        $decoded = is_string($rawConfig) ? json_decode($rawConfig, true) : null;
+
+        if (!is_array($decoded) || empty($decoded)) {
+            return self::defaultProfitAllocationItems();
+        }
+
+        $items = [];
+        foreach ($decoded as $idx => $item) {
+            $label = trim((string) ($item['label'] ?? $item['name'] ?? 'POS ' . ($idx + 1)));
+            // Strip trailing percentage if user typed it in label so we don't duplicate it
+            $cleanLabel = trim((string) preg_replace('/\s*\d+(?:[.,]\d+)?%\s*$/u', '', $label));
+            if ($cleanLabel === '') {
+                $cleanLabel = $label;
+            }
+            $pct = (float) ($item['percentage'] ?? 0);
+            $pctFormatted = rtrim(rtrim(number_format($pct, 2, '.', ''), '0'), '.');
+            $key = !empty($item['key'])
+                ? (string) $item['key']
+                : (\Illuminate\Support\Str::slug($cleanLabel, '_') ?: ('pos_' . ($idx + 1)));
+
+            $items[] = [
+                'key' => $key,
+                'label' => $cleanLabel,
+                'name' => "{$cleanLabel} {$pctFormatted}%",
+                'percentage' => $pct,
+            ];
+        }
+
+        return $items;
+    }
+
+    public static function profitAllocationSettingKey(Carbon $start, Carbon $end): string
+    {
+        return 'profit_allocation_credits_' . $start->format('Ymd') . '_' . $end->format('Ymd');
+    }
+
+    public function getProfitAllocationReport(Carbon $start, Carbon $end, ?array $overrideCredits = null): array
+    {
+        $profitLoss = $this->getProfitLossReport($start, $end);
+        $grossProfit = (float) ($profitLoss['gross_profit'] ?? 0.0);
+
+        $settingKey = self::profitAllocationSettingKey($start, $end);
+        $rawSaved = \App\Models\Setting::get($settingKey);
+        $savedCredits = is_string($rawSaved) ? (json_decode($rawSaved, true) ?: []) : [];
+
+        if (is_array($overrideCredits) && !empty($overrideCredits)) {
+            foreach ($overrideCredits as $k => $v) {
+                if (is_string($v)) {
+                    $v = str_replace(['Rp', 'rp', ' ', '.'], '', $v);
+                    $v = str_replace(',', '.', $v);
+                }
+                $savedCredits[$k] = max(0.0, (float) $v);
+            }
+        }
+
+        $items = self::getProfitAllocationItems();
+        $allocations = collect();
+        $runningDebit = 0.0;
+        $totalItems = count($items);
+
+        foreach ($items as $idx => $item) {
+            $pct = (float) $item['percentage'];
+            if ($idx === $totalItems - 1 && $grossProfit != 0) {
+                $debit = round($grossProfit - $runningDebit);
+            } else {
+                $debit = round(($grossProfit * $pct) / 100);
+                $runningDebit += $debit;
+            }
+
+            $key = $item['key'];
+            $credit = isset($savedCredits[$key]) ? max(0.0, (float) $savedCredits[$key]) : 0.0;
+
+            $allocations->push((object) [
+                'key' => $key,
+                'label' => $item['label'] ?? $item['name'],
+                'name' => $item['name'],
+                'percentage' => $pct,
+                'debit' => $debit,
+                'credit' => $credit,
+                'balance' => $debit - $credit,
+            ]);
+        }
+
+        $totalDebit = (float) $allocations->sum('debit');
+        $totalCredit = (float) $allocations->sum('credit');
+        $remainingBalance = $totalDebit - $totalCredit;
+
+        return [
+            'allocations' => $allocations,
+            'summary' => [
+                'total_revenue' => (float) ($profitLoss['total_revenue'] ?? 0.0),
+                'total_cogs' => (float) ($profitLoss['total_cogs'] ?? 0.0),
+                'total_expenses_and_shrinkage' => (float) ($profitLoss['total_expenses_and_shrinkage'] ?? 0.0),
+                'gross_profit' => $grossProfit,
+                'total_percentage' => (float) $allocations->sum('percentage'),
+                'total_debit' => $totalDebit,
+                'total_credit' => $totalCredit,
+                'remaining_balance' => $remainingBalance,
             ],
         ];
     }

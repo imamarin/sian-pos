@@ -150,6 +150,11 @@ Route::middleware('auth')->group(function () {
         // 7. Laporan Pendapatan Harian
         Route::get('/income', [ReportController::class, 'income'])->name('income');
         Route::get('/income/pdf', [ReportController::class, 'exportIncomePdf'])->name('income.pdf');
+
+        // 8. Laporan Alokasi Laba Kotor
+        Route::get('/profit-allocation', [ReportController::class, 'profitAllocation'])->name('profit-allocation');
+        Route::post('/profit-allocation/credits', [ReportController::class, 'saveProfitAllocationCredits'])->name('profit-allocation.save-credits');
+        Route::get('/profit-allocation/pdf', [ReportController::class, 'exportProfitAllocationPdf'])->name('profit-allocation.pdf');
     });
 
     // Pengaturan Toko & Manajemen Pengguna (Admin & Super Admin)

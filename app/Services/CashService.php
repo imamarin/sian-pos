@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\CashShift;
 use App\Models\CashTransaction;
 use App\Models\Sale;
+use App\Models\SalePayment;
 use App\Models\SaleReturn;
 use Carbon\Carbon;
 use Exception;
@@ -42,8 +43,8 @@ class CashService
         // 1. Opening Cash
         $opening = (float) $shift->opening_cash;
 
-        // 2. Sales in Cash during shift
-        $cashSales = (float) Sale::where('cash_shift_id', $shift->id)
+        // 2. Sales in Cash during shift (Direct Cash + Cash portion of Split Payments)
+        $directCashSales = (float) Sale::where('cash_shift_id', $shift->id)
             ->where('payment_method', 'cash')
             ->where('status', 'completed')
             ->sum('paid_amount') - (float) Sale::where('cash_shift_id', $shift->id)
@@ -51,17 +52,35 @@ class CashService
             ->where('status', 'completed')
             ->sum('change_amount');
 
-        // Non cash sales (Transfer, QRIS, Debit, dll.) + Non-cash DP/Receivable payments during shift
+        $splitCashSales = (float) SalePayment::where('payment_method', 'cash')
+            ->whereHas('sale', function ($q) use ($shift) {
+                $q->where('cash_shift_id', $shift->id)
+                  ->where('payment_method', 'split')
+                  ->where('status', 'completed');
+            })
+            ->sum('amount');
+
+        $cashSales = $directCashSales + $splitCashSales;
+
+        // Non cash sales (Transfer, QRIS, Debit, dll.) + Split Non-Cash + Non-cash DP/Receivable payments during shift
         $nonCashDirectSales = (float) Sale::where('cash_shift_id', $shift->id)
-            ->whereNotIn('payment_method', ['cash', 'debt'])
+            ->whereNotIn('payment_method', ['cash', 'debt', 'split'])
             ->where('status', 'completed')
             ->sum('grand_total');
+
+        $splitNonCashSales = (float) SalePayment::where('payment_method', '!=', 'cash')
+            ->whereHas('sale', function ($q) use ($shift) {
+                $q->where('cash_shift_id', $shift->id)
+                  ->where('payment_method', 'split')
+                  ->where('status', 'completed');
+            })
+            ->sum('amount');
 
         $nonCashReceivablePayments = (float) \App\Models\ReceivablePayment::where('cash_shift_id', $shift->id)
             ->where('payment_method', '!=', 'cash')
             ->sum('total_paid');
 
-        $nonCashSales = $nonCashDirectSales + $nonCashReceivablePayments;
+        $nonCashSales = $nonCashDirectSales + $splitNonCashSales + $nonCashReceivablePayments;
 
         // 3. Cash In transactions (modal tambah, dll.)
         $cashIn = (float) CashTransaction::where('cash_shift_id', $shift->id)
@@ -69,9 +88,14 @@ class CashService
             ->where('category', '!=', 'sale')
             ->sum('amount');
 
-        // 4. Cash Out transactions (beban, pengeluaran kas, dll.)
+        // 4. Cash Out transactions (beban, pengeluaran kas, ongkir laci, dll.)
         $cashOut = (float) CashTransaction::where('cash_shift_id', $shift->id)
             ->where('type', 'out')
+            ->sum('amount');
+
+        $shippingCashOut = (float) CashTransaction::where('cash_shift_id', $shift->id)
+            ->where('type', 'out')
+            ->where('category', 'shipping')
             ->sum('amount');
 
         // 5. Cash Refunds from Returns
@@ -88,6 +112,7 @@ class CashService
             'total_sales' => $cashSales + $nonCashSales,
             'cash_in' => $cashIn,
             'cash_out' => $cashOut,
+            'shipping_cash_out' => $shippingCashOut,
             'cash_refunds' => $cashRefunds,
             'expected_cash' => $expectedCash,
         ];

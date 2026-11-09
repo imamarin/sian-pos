@@ -136,18 +136,27 @@
                 <td class="text-end">Rp {{ number_format($sale->net_grand_total, 0, ',', '.') }}</td>
             </tr>
         @endif
-        <tr>
-            @if($sale->payment_method === 'debt')
-                @if($sale->paid_amount > 0)
-                    <td>DP ({{ strtoupper($sale->dp_payment_method ?? 'CASH') }}):</td>
+        @if($sale->payment_method === 'split' && $sale->payments->isNotEmpty())
+            @foreach($sale->payments as $sp)
+                <tr>
+                    <td>Bayar ({{ strtoupper($sp->payment_method) }}):</td>
+                    <td class="text-end">{{ number_format($sp->tendered_amount > 0 ? $sp->tendered_amount : $sp->amount, 0, ',', '.') }}</td>
+                </tr>
+            @endforeach
+        @else
+            <tr>
+                @if($sale->payment_method === 'debt')
+                    @if($sale->paid_amount > 0)
+                        <td>DP ({{ strtoupper($sale->dp_payment_method ?? 'CASH') }}):</td>
+                    @else
+                        <td>Bayar (TEMPO):</td>
+                    @endif
                 @else
-                    <td>Bayar (TEMPO):</td>
+                    <td>Bayar ({{ strtoupper($sale->payment_method) }}):</td>
                 @endif
-            @else
-                <td>Bayar ({{ strtoupper($sale->payment_method) }}):</td>
-            @endif
-            <td class="text-end">{{ number_format($sale->paid_amount, 0, ',', '.') }}</td>
-        </tr>
+                <td class="text-end">{{ number_format($sale->paid_amount, 0, ',', '.') }}</td>
+            </tr>
+        @endif
         @if($sale->remaining_debt > 0)
             <tr class="fw-bold">
                 <td>SISA HUTANG:</td>

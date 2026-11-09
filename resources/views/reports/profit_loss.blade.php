@@ -3,13 +3,119 @@
 @section('title', 'Laporan Laba Rugi')
 
 @section('content')
-<div class="container-fluid px-0" style="max-width: 950px;">
+<style>
+    .table-allocation {
+        border-collapse: collapse;
+        width: 100%;
+    }
+    .table-allocation th {
+        background-color: #3b7ddd !important;
+        color: #ffffff !important;
+        font-weight: 700;
+        text-transform: uppercase;
+        border: 1px solid #1e293b !important;
+        padding: 10px 12px !important;
+    }
+    .table-allocation td {
+        border: 1px solid #334155 !important;
+        padding: 8px 12px !important;
+        color: #0f172a;
+        font-size: 0.9rem;
+    }
+    .table-allocation tfoot tr.allocation-footer-row td {
+        background-color: #3b7ddd !important;
+        color: #0f172a !important;
+        font-weight: 800;
+        font-size: 0.95rem;
+        border: 1px solid #1e293b !important;
+    }
+    .credit-print-text {
+        display: none;
+    }
+    @media print {
+        form,
+        form.printable-form,
+        form#plAllocationCreditsForm {
+            display: block !important;
+        }
+        .credit-print-text {
+            display: inline !important;
+        }
+        @page {
+            size: A4 portrait;
+            margin: 12mm 10mm;
+        }
+        body {
+            font-size: 9pt !important;
+            color: #111 !important;
+            background: #fff !important;
+        }
+        .container-fluid {
+            max-width: 100% !important;
+            padding: 0 !important;
+        }
+        .card, .card-custom {
+            border: none !important;
+            box-shadow: none !important;
+            padding: 0 !important;
+            margin-bottom: 12px !important;
+            background: transparent !important;
+        }
+        table {
+            page-break-inside: auto;
+        }
+        tr {
+            page-break-inside: avoid !important;
+        }
+        table.table-allocation {
+            width: 100% !important;
+            border-collapse: collapse !important;
+            margin-top: 6px !important;
+            margin-bottom: 15px !important;
+            page-break-inside: avoid !important;
+        }
+        table.table-allocation th {
+            background-color: #3b7ddd !important;
+            color: #ffffff !important;
+            font-weight: bold !important;
+            text-transform: uppercase !important;
+            border: 1px solid #1e293b !important;
+            padding: 6px 8px !important;
+            font-size: 9pt !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+        }
+        table.table-allocation td {
+            border: 1px solid #334155 !important;
+            padding: 5px 8px !important;
+            font-size: 8.5pt !important;
+            color: #0f172a !important;
+        }
+        table.table-allocation tfoot tr.allocation-footer-row td {
+            background-color: #3b7ddd !important;
+            color: #000000 !important;
+            font-weight: 800 !important;
+            font-size: 9pt !important;
+            border: 1px solid #1e293b !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+        }
+        .signature-table, table.table-hover {
+            page-break-inside: avoid !important;
+        }
+    }
+</style>
+
+<div class="container-fluid px-0" style="max-width: 980px;">
     <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3 mb-4 d-print-none">
         <div>
             <h4 class="fw-bold mb-1">Laporan Laba Rugi (Profit & Loss)</h4>
-            <p class="text-muted small mb-0">Analisis margin keuntungan kotor, HPP barang terjual, dan laba operasional bersih</p>
+            <p class="text-muted small mb-0">Analisis pendapatan penjualan, HPP, beban operasional & penyusutan, Laba Kotor, serta Alokasi Laba</p>
         </div>
-        <div class="d-flex gap-2">
+        <div class="d-flex flex-wrap gap-2">
+            <a href="{{ route('settings.index') }}#profit-allocation-settings" class="btn btn-outline-primary btn-sm rounded-pill px-3 shadow-sm d-flex align-items-center gap-1">
+                <i class="bi bi-sliders"></i> Atur % Alokasi
+            </a>
             <a href="{{ route('reports.profit-loss.pdf', request()->all()) }}" class="btn btn-outline-danger btn-sm rounded-pill px-3 shadow-sm d-flex align-items-center gap-1">
                 <i class="bi bi-file-earmark-pdf"></i> Ekspor PDF
             </a>
@@ -72,9 +178,9 @@
 
     <!-- Income Statement Table -->
     <div class="card card-custom p-4 mb-4">
-        <h5 class="fw-bold mb-4 text-dark"><i class="bi bi-cash-stack text-primary me-2"></i> Laporan Laba Rugi Komprehensif</h5>
+        <h5 class="fw-bold mb-4 text-dark d-print-none"><i class="bi bi-cash-stack text-primary me-2"></i> Laporan Laba Rugi Komprehensif</h5>
 
-        <div class="table-responsive">
+        <div class="table-responsive mb-4">
             <table class="table table-bordered align-middle mb-0">
                 <thead class="table-light">
                     <tr>
@@ -83,7 +189,7 @@
                     </tr>
                 </thead>
                 <tbody>
-                    <!-- Pendapatan -->
+                    <!-- 1. Pendapatan -->
                     <tr class="table-light fw-bold">
                         <td colspan="2">1. PENDAPATAN OPERASIONAL</td>
                     </tr>
@@ -112,7 +218,7 @@
                     </tr>
                     @endif
 
-                    <!-- HPP -->
+                    <!-- 2. HPP -->
                     <tr class="table-light fw-bold">
                         <td colspan="2">2. HARGA POKOK PENJUALAN (HPP / COGS)</td>
                     </tr>
@@ -121,28 +227,145 @@
                         <td class="text-end text-danger">- Rp {{ number_format($profitLoss['total_cogs'], 0, ',', '.') }}</td>
                     </tr>
 
-                    <!-- Laba Kotor -->
-                    <tr class="table-primary fw-bold fs-6">
-                        <td>LABA KOTOR (GROSS PROFIT)</td>
-                        <td class="text-end text-primary">Rp {{ number_format($profitLoss['gross_profit'], 0, ',', '.') }}</td>
-                    </tr>
-
-                    <!-- Beban Operasional -->
+                    <!-- 3. Beban Operasional & Penyusutan (Sebelum Laba Kotor) -->
                     <tr class="table-light fw-bold">
-                        <td colspan="2">3. BEBAN OPERASIONAL KAS</td>
+                        <td colspan="2">3. BEBAN OPERASIONAL & PENYUSUTAN</td>
                     </tr>
                     <tr>
                         <td class="ps-4 text-muted">Beban Operasional & Pengeluaran Kasir (-)</td>
                         <td class="text-end text-danger">- Rp {{ number_format($profitLoss['expenses'], 0, ',', '.') }}</td>
                     </tr>
+                    <tr>
+                        <td class="ps-4 text-muted">
+                            Total Penyusutan & Kerugian Stok (Opname / Rusak / Hilang) (-)
+                            @if(($profitLoss['stock_shrinkage_events'] ?? 0) > 0)
+                                <a href="{{ route('reports.stock-shrinkage', request()->all()) }}" class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle text-decoration-none ms-1 d-print-none" title="Lihat rincian barang yang menyusut">
+                                    {{ $profitLoss['stock_shrinkage_events'] }} Catatan ({{ rtrim(rtrim(number_format((float) $profitLoss['stock_shrinkage_items'], 3, ',', '.'), '0'), ',') }} Item) <i class="bi bi-box-arrow-up-right ms-1"></i>
+                                </a>
+                            @endif
+                        </td>
+                        <td class="text-end text-danger">- Rp {{ number_format($profitLoss['stock_shrinkage'] ?? 0, 0, ',', '.') }}</td>
+                    </tr>
+                    <tr class="fw-bold">
+                        <td class="ps-4">Total Beban Operasional & Penyusutan</td>
+                        <td class="text-end text-danger">- Rp {{ number_format($profitLoss['total_expenses_and_shrinkage'] ?? $profitLoss['expenses'], 0, ',', '.') }}</td>
+                    </tr>
 
-                    <!-- Laba Bersih -->
-                    <tr class="table-success fw-bold fs-5">
-                        <td>LABA BERSIH OPERASIONAL (NET PROFIT)</td>
-                        <td class="text-end text-success">Rp {{ number_format($profitLoss['net_profit'], 0, ',', '.') }}</td>
+                    <!-- Laba Kotor (Gross Profit) -->
+                    <tr class="table-primary fw-bold fs-5">
+                        <td>LABA KOTOR (GROSS PROFIT)</td>
+                        <td class="text-end {{ $profitLoss['gross_profit'] >= 0 ? 'text-primary' : 'text-danger' }}">
+                            {{ $profitLoss['gross_profit'] < 0 ? '- ' : '' }}Rp {{ number_format(abs($profitLoss['gross_profit']), 0, ',', '.') }}
+                        </td>
                     </tr>
                 </tbody>
             </table>
+        </div>
+
+        <!-- 4. ALOKASI PEMBAGIAN LABA KOTOR (Tepat di Bawah Laba Kotor) -->
+        <div class="pt-3 border-top">
+            <form action="{{ route('reports.profit-allocation.save-credits') }}" method="POST" id="plAllocationCreditsForm" class="printable-form">
+                @csrf
+                <input type="hidden" name="redirect_to" value="profit-loss">
+                <input type="hidden" name="period" value="{{ $period }}">
+                <input type="hidden" name="start_date" value="{{ $start->format('Y-m-d') }}">
+                <input type="hidden" name="end_date" value="{{ $end->format('Y-m-d') }}">
+
+                <div class="d-flex flex-column flex-sm-row justify-content-between align-items-sm-center gap-2 mb-3">
+                    <div>
+                        <h6 class="fw-bold mb-0 text-dark">
+                            <i class="bi bi-pie-chart-fill text-primary me-2"></i>4. ALOKASI PEMBAGIAN LABA KOTOR (100%)
+                        </h6>
+                        <small class="text-muted d-print-none">
+                            Pembagian otomatis dari <strong>LABA KOTOR</strong> sesuai persentase pos. Ketik nominal pada kolom <strong>KREDIT</strong> lalu klik <strong>Simpan Nilai Kredit</strong>.
+                        </small>
+                    </div>
+                    <div class="d-flex gap-2 d-print-none">
+                        <a href="{{ route('settings.index') }}#profit-allocation-settings" class="btn btn-light border btn-sm rounded-pill px-3">
+                            <i class="bi bi-gear me-1"></i> Atur %
+                        </a>
+                        <button type="submit" class="btn btn-primary-custom btn-sm rounded-pill px-4 shadow-sm d-flex align-items-center gap-1">
+                            <i class="bi bi-check2-circle"></i> Simpan Nilai Kredit
+                        </button>
+                    </div>
+                </div>
+
+                <div class="table-responsive">
+                    <table class="table-allocation">
+                        <thead>
+                            <tr>
+                                <th style="width: 30%;">NAMA</th>
+                                <th class="text-end" style="width: 10%;">%</th>
+                                <th class="text-end" style="width: 20%;">LABA KOTOR</th>
+                                <th class="text-end" style="width: 20%;">DEBIT</th>
+                                <th class="text-end" style="width: 20%;">KREDIT</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <!-- Baris Pertama: LABA KOTOR -->
+                            <tr>
+                                <td class="fw-bold">LABA KOTOR</td>
+                                <td class="text-end"></td>
+                                <td class="text-end fw-bold">Rp{{ number_format($allocationSummary['gross_profit'], 0, ',', ',') }}</td>
+                                <td class="text-end"></td>
+                                <td class="text-end"></td>
+                            </tr>
+
+                            <!-- Baris Pos Alokasi -->
+                            @foreach($allocations as $row)
+                                <tr>
+                                    <td class="fw-semibold">{{ $row->name }}</td>
+                                    <td class="text-end">{{ rtrim(rtrim(number_format($row->percentage, 2, '.', ''), '0'), '.') }}%</td>
+                                    <td class="text-end"></td>
+                                    <td class="text-end fw-semibold">Rp{{ number_format($row->debit, 0, ',', ',') }}</td>
+                                    <td class="text-end">
+                                        <div class="input-group input-group-sm d-print-none">
+                                            <span class="input-group-text bg-light text-muted">Rp</span>
+                                            <input type="text"
+                                                   inputmode="numeric"
+                                                   name="credits[{{ $row->key }}]"
+                                                   class="form-control form-control-sm text-end fw-semibold input-rupiah credit-input"
+                                                   value="{{ $row->credit > 0 ? number_format($row->credit, 0, ',', '.') : '' }}"
+                                                   placeholder="0"
+                                                   oninput="recalculatePlAllocationTotals()">
+                                        </div>
+                                        <span class="credit-print-text fw-semibold" data-key="{{ $row->key }}">
+                                            {{ $row->credit > 0 ? 'Rp' . number_format($row->credit, 0, ',', ',') : '' }}
+                                        </span>
+                                    </td>
+                                </tr>
+                            @endforeach
+
+                            <!-- Baris Pemisah Kosong -->
+                            <tr>
+                                <td style="height: 24px;"></td>
+                                <td></td>
+                                <td></td>
+                                <td></td>
+                                <td></td>
+                            </tr>
+                        </tbody>
+                        <tfoot>
+                            <tr class="allocation-footer-row">
+                                <td></td>
+                                <td></td>
+                                <td class="text-end">Rp{{ number_format($allocationSummary['gross_profit'], 0, ',', ',') }}</td>
+                                <td class="text-end" id="plFooterTotalDebit" data-debit="{{ $allocationSummary['total_debit'] }}">Rp{{ number_format($allocationSummary['total_debit'], 0, ',', ',') }}</td>
+                                <td class="text-end" id="plFooterTotalCredit">Rp{{ number_format($allocationSummary['total_credit'], 0, ',', ',') }}</td>
+                            </tr>
+                            <tr class="allocation-footer-row">
+                                <td></td>
+                                <td></td>
+                                <td></td>
+                                <td></td>
+                                <td class="text-end" id="plFooterRemainingBalance">
+                                    {{ $allocationSummary['remaining_balance'] < 0 ? '-Rp' : 'Rp' }}{{ number_format(abs($allocationSummary['remaining_balance']), 0, ',', ',') }}
+                                </td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+            </form>
         </div>
     </div>
 
@@ -199,4 +422,38 @@
         </table>
     </div>
 </div>
+
+@push('scripts')
+<script>
+    function formatPlCommaCurrency(num) {
+        return new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(Math.round(num));
+    }
+
+    function recalculatePlAllocationTotals() {
+        const totalDebitEl = document.getElementById('plFooterTotalDebit');
+        const totalDebit = parseFloat(totalDebitEl?.getAttribute('data-debit') || '0') || 0;
+
+        let totalCredit = 0;
+        document.querySelectorAll('#plAllocationCreditsForm .credit-input').forEach(inp => {
+            const raw = (inp.value || '').toString().replace(/\./g, '').replace(/,/g, '');
+            const val = parseFloat(raw) || 0;
+            totalCredit += val;
+
+            const parentTd = inp.closest('td');
+            const printSpan = parentTd?.querySelector('.credit-print-text');
+            if (printSpan) {
+                printSpan.innerText = val > 0 ? 'Rp' + formatPlCommaCurrency(val) : '';
+            }
+        });
+
+        const remaining = totalDebit - totalCredit;
+
+        const footerCreditEl = document.getElementById('plFooterTotalCredit');
+        const footerRemEl = document.getElementById('plFooterRemainingBalance');
+
+        if (footerCreditEl) footerCreditEl.innerText = 'Rp' + formatPlCommaCurrency(totalCredit);
+        if (footerRemEl) footerRemEl.innerText = (remaining < 0 ? '-Rp' : 'Rp') + formatPlCommaCurrency(Math.abs(remaining));
+    }
+</script>
+@endpush
 @endsection

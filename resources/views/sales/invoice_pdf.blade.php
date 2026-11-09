@@ -46,7 +46,13 @@
             </td>
             <td style="width: 50%;" class="text-right">
                 <strong>Kasir:</strong> {{ $sale->user?->name ?? 'Kasir' }}<br>
-                <strong>Metode Bayar:</strong> {{ strtoupper($sale->payment_method) }}<br>
+                <strong>Metode Bayar:</strong>
+                @if($sale->payment_method === 'split' && $sale->payments->isNotEmpty())
+                    SPLIT ({{ $sale->payments->map(fn($sp) => strtoupper($sp->payment_method) . ': Rp ' . number_format($sp->amount, 0, ',', '.'))->implode(' + ') }})
+                @else
+                    {{ strtoupper($sale->payment_method) }}
+                @endif
+                <br>
                 <strong>Status:</strong> LUNAS
             </td>
         </tr>

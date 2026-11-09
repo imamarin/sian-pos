@@ -46,7 +46,9 @@
             <div class="col-md-3">
                 <small class="text-muted d-block">Metode & Status Bayar</small>
                 <div class="mt-1 d-flex align-items-center gap-1 flex-wrap">
-                    <span class="badge bg-secondary text-uppercase px-2 py-1">{{ $sale->payment_method === 'debt' ? 'Hutang/Tempo' : $sale->payment_method }}</span>
+                    <span class="badge bg-secondary text-uppercase px-2 py-1">
+                        {{ $sale->payment_method === 'debt' ? 'Hutang/Tempo' : ($sale->payment_method === 'split' ? 'Split / Campuran' : $sale->payment_method) }}
+                    </span>
                     @if($sale->payment_method === 'debt' && $sale->dp_payment_method)
                         <span class="badge bg-info-subtle text-info border border-info-subtle text-uppercase">DP: {{ $sale->dp_payment_method }}</span>
                     @endif
@@ -58,6 +60,15 @@
                         <span class="badge bg-danger-subtle text-danger">Belum Bayar</span>
                     @endif
                 </div>
+                @if($sale->payment_method === 'split' && $sale->payments->isNotEmpty())
+                    <div class="mt-1 d-flex flex-wrap gap-1">
+                        @foreach($sale->payments as $sp)
+                            <span class="badge bg-light text-dark border" style="font-size: 0.7rem;">
+                                {{ strtoupper($sp->payment_method) }}: Rp {{ number_format($sp->amount, 0, ',', '.') }}
+                            </span>
+                        @endforeach
+                    </div>
+                @endif
                 @if($sale->due_date && $sale->remaining_debt > 0)
                     <small class="text-danger d-block mt-1">Jatuh Tempo: {{ $sale->due_date->format('d/m/Y') }}</small>
                 @endif
@@ -158,6 +169,14 @@
                         <span class="text-muted">Uang Dibayar:</span>
                         <span class="fw-semibold">Rp {{ number_format($sale->paid_amount, 0, ',', '.') }}</span>
                     </div>
+                    @if($sale->payment_method === 'split' && $sale->payments->isNotEmpty())
+                        @foreach($sale->payments as $sp)
+                            <div class="list-group-item d-flex justify-content-between px-0 py-1 small text-muted ps-3">
+                                <span>&bull; {{ \App\Models\SalePayment::methodLabel($sp->payment_method) }}:</span>
+                                <span>Rp {{ number_format($sp->amount, 0, ',', '.') }}</span>
+                            </div>
+                        @endforeach
+                    @endif
                     @if($sale->remaining_debt > 0)
                         <div class="list-group-item d-flex justify-content-between px-0 py-2 small text-danger fw-bold">
                             <span>Sisa Hutang:</span>

@@ -627,5 +627,350 @@ class DebtSystemTest extends TestCase
         $resBulk->assertSee('SKU-BC-02'); // Fallback to SKU when barcode is null
         $resBulk->assertSee('9 Stiker Label');
     }
+
+    public function test_pos_split_payment_cash_and_transfer_integrates_with_shift_and_income_report(): void
+    {
+        $admin = User::where('username', 'admin')->first();
+        $product = Product::first();
+        $product->update([
+            'cost_price' => 30000,
+            'selling_price' => 50000,
+            'stock' => 20,
+        ]);
+
+        // Open shift with Rp 100.000
+        $this->actingAs($admin)->post(route('cash-shifts.open'), [
+            'opening_cash' => '100000',
+            'notes' => 'Shift Test Split Payment',
+        ]);
+
+        $shift = $admin->fresh()->currentOpenShift;
+        $this->assertNotNull($shift);
+
+        // Checkout Rp 50.000 paid via Split: Rp 20.000 Cash + Rp 30.000 Transfer
+        $resCheckout = $this->actingAs($admin)->postJson(route('pos.checkout'), [
+            'items' => [
+                [
+                    'product_id' => $product->id,
+                    'qty' => 1,
+                    'selling_price' => 50000,
+                    'subtotal' => 50000,
+                    'discount' => 0,
+                ],
+            ],
+            'customer_id' => null,
+            'paid_amount' => 50000,
+            'payment_method' => 'split',
+            'split_payments' => [
+                ['method' => 'cash', 'amount' => 20000],
+                ['method' => 'transfer', 'amount' => 30000],
+            ],
+            'notes' => 'Bayar 20rb cash + 30rb transfer',
+        ]);
+
+        $resCheckout->assertStatus(200)
+            ->assertJson(['success' => true]);
+
+        $saleId = $resCheckout->json('sale_id');
+        $sale = Sale::with('payments')->findOrFail($saleId);
+
+        $this->assertEquals('split', $sale->payment_method);
+        $this->assertEquals(50000, (float) $sale->grand_total);
+        $this->assertEquals(50000, (float) $sale->paid_amount);
+        $this->assertEquals(0, (float) $sale->change_amount);
+        $this->assertCount(2, $sale->payments);
+        $this->assertEquals(20000, (float) $sale->payments->firstWhere('payment_method', 'cash')->amount);
+        $this->assertEquals(30000, (float) $sale->payments->firstWhere('payment_method', 'transfer')->amount);
+
+        // Verify Shift Summary: only Rp 20.000 enters physical cash drawer, Rp 30.000 is non-cash
+        $cashService = app(\App\Services\CashService::class);
+        $shiftSummary = $cashService->calculateShiftSummary($shift);
+        $this->assertEquals(20000, $shiftSummary['cash_sales']);
+        $this->assertEquals(30000, $shiftSummary['non_cash_sales']);
+        $this->assertEquals(50000, $shiftSummary['total_sales']);
+        $this->assertEquals(120000, $shiftSummary['expected_cash']); // 100.000 opening + 20.000 cash
+
+        // Verify Income Report (Laporan Pendapatan)
+        $reportService = app(\App\Services\ReportService::class);
+        $incomeReport = $reportService->getIncomeReport(now()->startOfDay(), now()->endOfDay());
+        $this->assertEquals(50000, $incomeReport['summary']['total_penjualan']);
+        $this->assertEquals(50000, $incomeReport['summary']['total_pembayaran_real_kios']);
+        $this->assertEquals(20000, $incomeReport['summary']['total_cash']);
+        $this->assertEquals(30000, $incomeReport['summary']['total_tf']);
+        $this->assertEquals(0, $incomeReport['summary']['total_qris']);
+        $this->assertEquals(30000, $incomeReport['summary']['total_modal']);
+        $this->assertEquals(20000, $incomeReport['summary']['total_laba_kotor']);
+
+        // Verify Receipt & Show views render cleanly
+        $this->actingAs($admin)->get(route('sales.receipt', $sale->id))
+            ->assertStatus(200)
+            ->assertSee('Bayar (CASH):')
+            ->assertSee('20.000')
+            ->assertSee('Bayar (TRANSFER):')
+            ->assertSee('30.000');
+
+        $this->actingAs($admin)->get(route('sales.show', $sale->id))
+            ->assertStatus(200)
+            ->assertSee('Split / Campuran');
+    }
+
+    public function test_shipping_paid_from_drawer_when_customer_pays_by_transfer_balances_shift_and_income_report(): void
+    {
+        $admin = User::where('username', 'admin')->first();
+        $product = Product::first();
+        $product->update([
+            'cost_price' => 60000,
+            'selling_price' => 100000,
+            'stock' => 20,
+        ]);
+
+        // 1. Open shift with Rp 200.000 modal awal
+        $this->actingAs($admin)->post(route('cash-shifts.open'), [
+            'opening_cash' => '200000',
+            'notes' => 'Shift Test Ongkir Laci',
+        ]);
+
+        $shift = $admin->fresh()->currentOpenShift;
+        $this->assertNotNull($shift);
+
+        // 2. Customer buys product Rp 100.000 + Ongkir Rp 15.000 = Rp 115.000 via Transfer
+        //    Ongkir Rp 15.000 dibayar tunai dari laci kasir ke kurir
+        $resCheckout = $this->actingAs($admin)->postJson(route('pos.checkout'), [
+            'items' => [
+                [
+                    'product_id' => $product->id,
+                    'qty' => 1,
+                    'selling_price' => 100000,
+                    'subtotal' => 100000,
+                    'discount' => 0,
+                ],
+            ],
+            'customer_id' => null,
+            'shipping_cost' => 15000,
+            'shipping_paid_from_drawer' => true,
+            'paid_amount' => 115000,
+            'payment_method' => 'transfer',
+        ]);
+
+        $resCheckout->assertStatus(200)
+            ->assertJson(['success' => true]);
+
+        // 3. Verify Shift Summary:
+        //    Opening Cash = 200.000
+        //    Cash Sales = 0
+        //    Shipping Cash Out from Drawer = 15.000
+        //    Expected Physical Cash in Drawer = 185.000
+        //    Non-Cash Sales (Transfer) = 115.000
+        $cashService = app(\App\Services\CashService::class);
+        $shiftSummary = $cashService->calculateShiftSummary($shift);
+        $this->assertEquals(200000, $shiftSummary['opening_cash']);
+        $this->assertEquals(0, $shiftSummary['cash_sales']);
+        $this->assertEquals(115000, $shiftSummary['non_cash_sales']);
+        $this->assertEquals(15000, $shiftSummary['shipping_cash_out']);
+        $this->assertEquals(15000, $shiftSummary['cash_out']);
+        $this->assertEquals(185000, $shiftSummary['expected_cash']);
+
+        // 4. Verify Income Report (Laporan Pendapatan - Opsi 1):
+        //    PENJUALAN = 100.000 (murni barang tanpa ongkir)
+        //    TF = 115.000 (sesuai mutasi masuk rekening)
+        //    CASH = -15.000 (dikurangi uang laci yang keluar untuk kurir)
+        //    PEMBAYARAN REAL KIOS = 100.000 (115.000 - 15.000)
+        //    MODAL = 60.000, LABA KOTOR = 40.000
+        $reportService = app(\App\Services\ReportService::class);
+        $incomeReport = $reportService->getIncomeReport(now()->startOfDay(), now()->endOfDay());
+        $this->assertEquals(100000, $incomeReport['summary']['total_penjualan']);
+        $this->assertEquals(115000, $incomeReport['summary']['total_tf']);
+        $this->assertEquals(-15000, $incomeReport['summary']['total_cash']);
+        $this->assertEquals(100000, $incomeReport['summary']['total_pembayaran_real_kios']);
+        $this->assertEquals(60000, $incomeReport['summary']['total_modal']);
+        $this->assertEquals(40000, $incomeReport['summary']['total_laba_kotor']);
+
+        // 5. Verify Profit & Loss Report does not treat courier pass-through shipping as store expense
+        $plReport = $reportService->getProfitLossReport(now()->startOfDay(), now()->endOfDay());
+        $this->assertEquals(100000, $plReport['total_revenue']);
+        $this->assertEquals(0, $plReport['expenses']);
+        $this->assertEquals(40000, $plReport['net_profit']);
+    }
+
+    public function test_profit_loss_report_includes_stock_shrinkage_under_option_a(): void
+    {
+        $admin = User::where('username', 'admin')->first();
+        $product = Product::first();
+        $product->update([
+            'cost_price' => 50000,
+            'selling_price' => 80000,
+            'stock' => 20,
+        ]);
+
+        // 1. Sell 2 pcs (Revenue = 160.000, COGS = 100.000, Gross Profit = 60.000)
+        $this->actingAs($admin)->postJson(route('pos.checkout'), [
+            'items' => [
+                [
+                    'product_id' => $product->id,
+                    'qty' => 2,
+                    'selling_price' => 80000,
+                    'subtotal' => 160000,
+                    'discount' => 0,
+                ],
+            ],
+            'customer_id' => null,
+            'paid_amount' => 160000,
+            'payment_method' => 'cash',
+        ])->assertStatus(200);
+
+        // 2. Record Stock Shrinkage (Opname/Rusak): 1 pcs keluar -> Loss = 1 * 50.000 = 50.000
+        $stockService = app(\App\Services\StockService::class);
+        $stockService->recordMovement(
+            product: $product->fresh(),
+            type: 'opname',
+            qtyIn: 0,
+            qtyOut: 1,
+            userId: $admin->id,
+            notes: 'Barang rusak saat opname'
+        );
+
+        // 3. Verify Profit & Loss Report (Opsi A):
+        //    Product Margin (Pendapatan - HPP) = 60.000
+        //    Stock Shrinkage = 50.000
+        //    Gross Profit (setelah dikurangi Beban & Penyusutan) = 60.000 - 50.000 = 10.000
+        $reportService = app(\App\Services\ReportService::class);
+        $plReport = $reportService->getProfitLossReport(now()->startOfDay(), now()->endOfDay());
+        $this->assertEquals(160000, $plReport['total_revenue']);
+        $this->assertEquals(100000, $plReport['total_cogs']);
+        $this->assertEquals(60000, $plReport['product_gross_profit']);
+        $this->assertEquals(50000, $plReport['stock_shrinkage']);
+        $this->assertEquals(1, $plReport['stock_shrinkage_items']);
+        $this->assertEquals(50000, $plReport['total_expenses_and_shrinkage']);
+        $this->assertEquals(10000, $plReport['gross_profit']);
+        $this->assertEquals(10000, $plReport['net_profit']);
+
+        // 4. Verify web & PDF views render Total Penyusutan before Laba Kotor & Allocation below Laba Kotor
+        $this->actingAs($admin)->get(route('reports.profit-loss', ['period' => 'today']))
+            ->assertStatus(200)
+            ->assertSee('3. BEBAN OPERASIONAL & PENYUSUTAN', false)
+            ->assertSee('Total Penyusutan & Kerugian Stok', false)
+            ->assertSee('LABA KOTOR (GROSS PROFIT)', false)
+            ->assertSee('4. ALOKASI PEMBAGIAN LABA KOTOR (100%)', false);
+
+        $this->actingAs($admin)->get(route('reports.profit-loss.pdf', ['period' => 'today', 'stream' => 1]))
+            ->assertStatus(200)
+            ->assertHeader('content-type', 'application/pdf');
+    }
+
+    public function test_profit_allocation_report_calculates_debits_and_saves_custom_credits(): void
+    {
+        $admin = User::where('username', 'admin')->first();
+        $product = Product::first();
+        $product->update([
+            'cost_price' => 1000000,
+            'selling_price' => 9144120,
+            'stock' => 10,
+        ]);
+
+        // 1. Sell 1 pcs so pure Gross Profit = Rp 8,144,120 (matching the user's screenshot example)
+        $this->actingAs($admin)->postJson(route('pos.checkout'), [
+            'items' => [
+                [
+                    'product_id' => $product->id,
+                    'qty' => 1,
+                    'selling_price' => 9144120,
+                    'subtotal' => 9144120,
+                    'discount' => 0,
+                ],
+            ],
+            'customer_id' => null,
+            'paid_amount' => 9144120,
+            'payment_method' => 'cash',
+        ])->assertStatus(200);
+
+        $startDate = now()->format('Y-m-d');
+        $endDate = now()->format('Y-m-d');
+
+        // 2. Save custom KREDIT for Operasional Gudang = Rp 435.500
+        $this->actingAs($admin)->post(route('reports.profit-allocation.save-credits'), [
+            'period' => 'custom',
+            'start_date' => $startDate,
+            'end_date' => $endDate,
+            'credits' => [
+                'operasional_gudang' => '435.500',
+            ],
+        ])->assertRedirect();
+
+        // 3. Verify ReportService calculations match the user's screenshot to the exact Rupiah
+        $reportService = app(\App\Services\ReportService::class);
+        $data = $reportService->getProfitAllocationReport(now()->startOfDay(), now()->endOfDay());
+
+        $this->assertEquals(8144120, $data['summary']['gross_profit']);
+        $this->assertEquals(8144120, $data['summary']['total_debit']);
+        $this->assertEquals(435500, $data['summary']['total_credit']);
+        $this->assertEquals(7708620, $data['summary']['remaining_balance']);
+
+        $rowsByKey = collect($data['allocations'])->keyBy('key');
+        $this->assertEquals(2443236, $rowsByKey['sdm']->debit);
+        $this->assertEquals(2443236, $rowsByKey['laba_bersih']->debit);
+        $this->assertEquals(814412, $rowsByKey['manajemen_resiko']->debit);
+        $this->assertEquals(407206, $rowsByKey['operasional_gudang']->debit);
+        $this->assertEquals(435500, $rowsByKey['operasional_gudang']->credit);
+        $this->assertEquals(407206, $rowsByKey['transportasi']->debit);
+        $this->assertEquals(651530, $rowsByKey['marketing']->debit);
+        $this->assertEquals(162882, $rowsByKey['adm']->debit);
+        $this->assertEquals(570088, $rowsByKey['peralatan']->debit);
+        $this->assertEquals(244324, $rowsByKey['pajak']->debit);
+
+        // 4. Verify web view & PDF export return 200 OK
+        $this->actingAs($admin)->get(route('reports.profit-allocation', [
+            'period' => 'custom',
+            'start_date' => $startDate,
+            'end_date' => $endDate,
+        ]))
+            ->assertStatus(200)
+            ->assertSee('Laporan Alokasi Laba Kotor')
+            ->assertSee('8.144.120')
+            ->assertSee('7.708.620');
+
+        $this->actingAs($admin)->get(route('reports.profit-allocation.pdf', [
+            'period' => 'custom',
+            'start_date' => $startDate,
+            'end_date' => $endDate,
+            'stream' => 1,
+        ]))->assertStatus(200);
+    }
+
+    public function test_custom_profit_allocation_percentage_settings_are_validated_and_applied(): void
+    {
+        $admin = User::where('username', 'admin')->first();
+
+        // 1. Attempt to save percentages not summing to 100% -> must fail validation
+        $this->actingAs($admin)->post(route('settings.update'), [
+            'store_name' => 'Kasir POS',
+            'tax_percentage' => '0',
+            'invoice_prefix' => 'INV',
+            'purchase_prefix' => 'PO',
+            'allocation_items' => [
+                ['key' => 'sdm', 'label' => 'SDM', 'percentage' => 40],
+                ['key' => 'laba_bersih', 'label' => 'LABA BERSIH', 'percentage' => 40],
+            ],
+        ])->assertSessionHasErrors('allocation_items');
+
+        // 2. Save valid percentages summing to 100%
+        $this->actingAs($admin)->post(route('settings.update'), [
+            'store_name' => 'Kasir POS',
+            'tax_percentage' => '0',
+            'invoice_prefix' => 'INV',
+            'purchase_prefix' => 'PO',
+            'allocation_items' => [
+                ['key' => 'sdm', 'label' => 'SDM', 'percentage' => 50],
+                ['key' => 'laba_bersih', 'label' => 'LABA BERSIH', 'percentage' => 30],
+                ['key' => 'operasional_gudang', 'label' => 'OPERASIONAL GUDANG', 'percentage' => 20],
+            ],
+        ])->assertSessionHasNoErrors();
+
+        $items = \App\Services\ReportService::getProfitAllocationItems();
+        $this->assertCount(3, $items);
+        $this->assertEquals('SDM 50%', $items[0]['name']);
+        $this->assertEquals(50, $items[0]['percentage']);
+        $this->assertEquals('OPERASIONAL GUDANG 20%', $items[2]['name']);
+        $this->assertEquals(20, $items[2]['percentage']);
+    }
 }
 

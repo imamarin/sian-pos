@@ -83,6 +83,11 @@ class Sale extends Model
         return $this->hasMany(SaleReturn::class);
     }
 
+    public function payments()
+    {
+        return $this->hasMany(SalePayment::class);
+    }
+
     public function paymentAllocations()
     {
         return $this->hasMany(ReceivablePaymentAllocation::class);

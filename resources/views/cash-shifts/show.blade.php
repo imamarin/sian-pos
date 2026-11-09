@@ -9,16 +9,31 @@
     $totalNetPaid = (float) $completedSales->sum(fn ($s) => min((float) $s->grand_total, (float) $s->paid_amount));
     $totalRemainingDebt = (float) $completedSales->sum(fn ($s) => max(0, (float) $s->grand_total - (float) $s->paid_amount));
 
-    // Group sales by payment method
-    $salesByMethod = $completedSales->groupBy('payment_method')->map(function ($group, $method) {
-        return [
-            'method' => $method,
-            'count' => $group->count(),
-            'grand_total' => (float) $group->sum('grand_total'),
-            'net_paid' => (float) $group->sum(fn ($s) => min((float) $s->grand_total, (float) $s->paid_amount)),
-            'remaining_debt' => (float) $group->sum(fn ($s) => max(0, (float) $s->grand_total - (float) $s->paid_amount)),
-        ];
-    });
+    // Group sales by payment method (breaking down 'split' sales into their respective channels)
+    $methodMap = [];
+    foreach ($completedSales as $sale) {
+        if ($sale->payment_method === 'split' && $sale->payments && $sale->payments->isNotEmpty()) {
+            foreach ($sale->payments as $sp) {
+                $m = $sp->payment_method;
+                if (!isset($methodMap[$m])) {
+                    $methodMap[$m] = ['method' => $m, 'count' => 0, 'grand_total' => 0.0, 'net_paid' => 0.0, 'remaining_debt' => 0.0];
+                }
+                $methodMap[$m]['count'] += 1;
+                $methodMap[$m]['grand_total'] += (float) $sp->amount;
+                $methodMap[$m]['net_paid'] += (float) $sp->amount;
+            }
+        } else {
+            $m = $sale->payment_method;
+            if (!isset($methodMap[$m])) {
+                $methodMap[$m] = ['method' => $m, 'count' => 0, 'grand_total' => 0.0, 'net_paid' => 0.0, 'remaining_debt' => 0.0];
+            }
+            $methodMap[$m]['count'] += 1;
+            $methodMap[$m]['grand_total'] += (float) $sale->grand_total;
+            $methodMap[$m]['net_paid'] += min((float) $sale->grand_total, (float) $sale->paid_amount);
+            $methodMap[$m]['remaining_debt'] += max(0.0, (float) $sale->grand_total - (float) $sale->paid_amount);
+        }
+    }
+    $salesByMethod = collect($methodMap);
 
     // Aggregate sold product items during this shift
     $soldProducts = collect();
@@ -142,7 +157,14 @@
                                 <td class="text-end fw-semibold text-success">+ Rp {{ number_format($summary['cash_in'], 0, ',', '.') }}</td>
                             </tr>
                             <tr>
-                                <td class="text-muted">4. Pengeluaran Kas / Biaya (-):</td>
+                                <td class="text-muted">
+                                    4. Pengeluaran Kas / Biaya (-):
+                                    @if(($summary['shipping_cash_out'] ?? 0) > 0)
+                                        <div class="small text-danger" style="font-size: 0.72rem;">
+                                            <i class="bi bi-truck me-1"></i>Termasuk Talangan Ongkir Kurir dari Laci: Rp {{ number_format($summary['shipping_cash_out'], 0, ',', '.') }}
+                                        </div>
+                                    @endif
+                                </td>
                                 <td class="text-end fw-semibold text-danger">- Rp {{ number_format($summary['cash_out'], 0, ',', '.') }}</td>
                             </tr>
                             <tr>
@@ -312,6 +334,12 @@
                                 @if($sale->payment_method === 'debt' && $sale->dp_payment_method)
                                     <div class="mt-1">
                                         <span class="badge bg-info-subtle text-info text-uppercase">DP: {{ $sale->dp_payment_method }}</span>
+                                    </div>
+                                @elseif($sale->payment_method === 'split' && $sale->payments && $sale->payments->isNotEmpty())
+                                    <div class="mt-1 small text-muted" style="font-size: 0.68rem;">
+                                        @foreach($sale->payments as $sp)
+                                            <div>{{ strtoupper($sp->payment_method) }}: Rp {{ number_format($sp->amount, 0, ',', '.') }}</div>
+                                        @endforeach
                                     </div>
                                 @endif
                                 <div class="mt-1">

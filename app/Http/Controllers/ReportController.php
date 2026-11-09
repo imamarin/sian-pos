@@ -142,9 +142,18 @@ class ReportController extends Controller
         [$start, $end] = $this->reportService->resolveDateRange($period, $request->input('start_date'), $request->input('end_date'));
 
         $profitLoss = $this->reportService->getProfitLossReport($start, $end);
+        $allocationData = $this->reportService->getProfitAllocationReport($start, $end);
         $bestSellers = $this->reportService->getBestSellers($start, $end, 10);
 
-        return view('reports.profit_loss', compact('profitLoss', 'bestSellers', 'period', 'start', 'end'));
+        return view('reports.profit_loss', [
+            'profitLoss' => $profitLoss,
+            'allocations' => $allocationData['allocations'],
+            'allocationSummary' => $allocationData['summary'],
+            'bestSellers' => $bestSellers,
+            'period' => $period,
+            'start' => $start,
+            'end' => $end,
+        ]);
     }
 
     public function exportProfitLossPdf(Request $request)
@@ -153,6 +162,7 @@ class ReportController extends Controller
         [$start, $end] = $this->reportService->resolveDateRange($period, $request->input('start_date'), $request->input('end_date'));
 
         $profitLoss = $this->reportService->getProfitLossReport($start, $end);
+        $allocationData = $this->reportService->getProfitAllocationReport($start, $end);
         $bestSellers = $this->reportService->getBestSellers($start, $end, 10);
 
         $settings = [
@@ -164,6 +174,8 @@ class ReportController extends Controller
 
         $pdf = Pdf::loadView('reports.profit_loss_pdf', [
             'profitLoss' => $profitLoss,
+            'allocations' => $allocationData['allocations'],
+            'allocationSummary' => $allocationData['summary'],
             'bestSellers' => $bestSellers,
             'startDate' => $start,
             'endDate' => $end,
@@ -567,6 +579,78 @@ class ReportController extends Controller
         ])->setPaper('a4', 'landscape');
 
         $fileName = "Laporan-Pendapatan-{$start->format('Ymd')}-{$end->format('Ymd')}.pdf";
+
+        return $request->has('stream') ? $pdf->stream($fileName) : $pdf->download($fileName);
+    }
+
+    /**
+     * 8. Laporan Alokasi Laba Kotor (Pembagian % Pos SDM, Laba Bersih, Manajemen Resiko, Gudang, Transportasi, Marketing, ADM, Peralatan, Pajak)
+     */
+    public function profitAllocation(Request $request)
+    {
+        $period = $request->input('period', 'this_month');
+        [$start, $end] = $this->reportService->resolveDateRange($period, $request->input('start_date'), $request->input('end_date'));
+
+        $data = $this->reportService->getProfitAllocationReport($start, $end);
+
+        return view('reports.profit_allocation', [
+            'allocations' => $data['allocations'],
+            'summary' => $data['summary'],
+            'period' => $period,
+            'start' => $start,
+            'end' => $end,
+        ]);
+    }
+
+    public function saveProfitAllocationCredits(Request $request)
+    {
+        $period = $request->input('period', 'this_month');
+        [$start, $end] = $this->reportService->resolveDateRange($period, $request->input('start_date'), $request->input('end_date'));
+
+        $rawCredits = $request->input('credits', []);
+        $cleanCredits = [];
+
+        foreach (\App\Services\ReportService::getProfitAllocationItems() as $item) {
+            $key = $item['key'];
+            $val = $rawCredits[$key] ?? 0;
+            if (is_string($val)) {
+                $val = str_replace(['Rp', 'rp', ' ', '.'], '', $val);
+                $val = str_replace(',', '.', $val);
+            }
+            $cleanCredits[$key] = max(0.0, (float) $val);
+        }
+
+        $settingKey = \App\Services\ReportService::profitAllocationSettingKey($start, $end);
+        Setting::set($settingKey, json_encode($cleanCredits), 'reports', "Kredit Alokasi Laba {$start->format('Y-m-d')} s/d {$end->format('Y-m-d')}");
+
+        $targetRoute = $request->input('redirect_to') === 'profit-loss'
+            ? 'reports.profit-loss'
+            : 'reports.profit-allocation';
+
+        return redirect()->route($targetRoute, [
+            'period' => $period,
+            'start_date' => $start->format('Y-m-d'),
+            'end_date' => $end->format('Y-m-d'),
+        ])->with('success', 'Data realisasi Kredit Alokasi Laba Kotor berhasil disimpan.');
+    }
+
+    public function exportProfitAllocationPdf(Request $request)
+    {
+        $period = $request->input('period', 'this_month');
+        [$start, $end] = $this->reportService->resolveDateRange($period, $request->input('start_date'), $request->input('end_date'));
+
+        $data = $this->reportService->getProfitAllocationReport($start, $end);
+        $settings = $this->getStoreSettings();
+
+        $pdf = Pdf::loadView('reports.profit_allocation_pdf', [
+            'allocations' => $data['allocations'],
+            'summary' => $data['summary'],
+            'startDate' => $start,
+            'endDate' => $end,
+            'settings' => $settings,
+        ])->setPaper('a4', 'portrait');
+
+        $fileName = "Laporan-Alokasi-Laba-{$start->format('Ymd')}-{$end->format('Ymd')}.pdf";
 
         return $request->has('stream') ? $pdf->stream($fileName) : $pdf->download($fileName);
     }

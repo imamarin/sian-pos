@@ -11,7 +11,7 @@ class SaleController extends Controller
 {
     public function index(Request $request)
     {
-        $query = Sale::with(['user', 'customer', 'returns'])->latest('transaction_date');
+        $query = Sale::with(['user', 'customer', 'returns', 'payments'])->latest('transaction_date');
 
         if ($search = $request->input('search')) {
             $query->where(function ($q) use ($search) {
@@ -30,7 +30,14 @@ class SaleController extends Controller
         }
 
         if ($method = $request->input('payment_method')) {
-            $query->where('payment_method', $method);
+            if ($method === 'split') {
+                $query->where('payment_method', 'split');
+            } else {
+                $query->where(function ($q) use ($method) {
+                    $q->where('payment_method', $method)
+                      ->orWhereHas('payments', fn ($pq) => $pq->where('payment_method', $method));
+                });
+            }
         }
 
         $sales = $query->paginate(15)->withQueryString();
@@ -40,13 +47,13 @@ class SaleController extends Controller
 
     public function show(Sale $sale)
     {
-        $sale->load(['user', 'customer', 'details.product.unit', 'returns.details.product', 'paymentAllocations.receivablePayment.user']);
+        $sale->load(['user', 'customer', 'details.product.unit', 'returns.details.product', 'paymentAllocations.receivablePayment.user', 'payments']);
         return view('sales.show', compact('sale'));
     }
 
     public function printReceipt(Sale $sale)
     {
-        $sale->load(['user', 'customer', 'details', 'returns.details']);
+        $sale->load(['user', 'customer', 'details', 'returns.details', 'payments']);
 
         $settings = [
             'store_name' => Setting::get('store_name', 'Kasir POS'),
@@ -60,7 +67,7 @@ class SaleController extends Controller
 
     public function downloadPdf(Sale $sale)
     {
-        $sale->load(['user', 'customer', 'details.product.unit', 'returns.details']);
+        $sale->load(['user', 'customer', 'details.product.unit', 'returns.details', 'payments']);
 
         $settings = [
             'store_name' => Setting::get('store_name', 'Kasir POS'),

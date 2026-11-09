@@ -42,6 +42,11 @@
             <div class="card card-custom p-3 bg-white">
                 <small class="text-muted d-block mb-1">Kas Keluar / Biaya (-)</small>
                 <h5 class="fw-bold text-danger mb-0">- Rp {{ number_format($summary['cash_out'], 0, ',', '.') }}</h5>
+                @if(($summary['shipping_cash_out'] ?? 0) > 0)
+                    <small class="text-muted d-block mt-1" style="font-size: 0.7rem;">
+                        <i class="bi bi-truck text-danger"></i> Ongkir Laci: Rp {{ number_format($summary['shipping_cash_out'], 0, ',', '.') }}
+                    </small>
+                @endif
             </div>
         </div>
         <div class="col-6 col-md-3">

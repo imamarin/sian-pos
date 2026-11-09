@@ -9,6 +9,7 @@ use App\Models\ReceivablePayment;
 use App\Models\ReceivablePaymentAllocation;
 use App\Models\Sale;
 use App\Models\SaleDetail;
+use App\Models\SalePayment;
 use App\Models\Setting;
 use Carbon\Carbon;
 use Exception;
@@ -149,8 +150,58 @@ class SaleService
             $paidAmount = isset($data['paid_amount']) ? (float) $data['paid_amount'] : $grandTotal;
             $customerId = !empty($data['customer_id']) ? (int) $data['customer_id'] : null;
             $dpPaymentMethod = null;
+            $normalizedSplits = [];
 
-            if ($paymentMethod === 'debt') {
+            if ($paymentMethod === 'split') {
+                $rawSplits = $data['split_payments'] ?? [];
+                foreach ($rawSplits as $spRow) {
+                    $spAmount = (float) ($spRow['amount'] ?? 0);
+                    $spMethod = strtolower((string) ($spRow['method'] ?? 'cash'));
+                    if ($spAmount > 0 && in_array($spMethod, ['cash', 'transfer', 'qris', 'debit', 'credit'], true)) {
+                        $normalizedSplits[] = [
+                            'method' => $spMethod,
+                            'tendered_amount' => $spAmount,
+                            'amount' => $spAmount,
+                            'note' => $spRow['note'] ?? null,
+                        ];
+                    }
+                }
+
+                if (empty($normalizedSplits)) {
+                    throw new Exception('Rincian pembayaran campuran (Split Payment) wajib diisi minimal 1 metode dengan nominal > 0.');
+                }
+
+                $totalSplitPaid = (float) collect($normalizedSplits)->sum('tendered_amount');
+                if ($totalSplitPaid < $grandTotal) {
+                    throw new Exception('Total pembayaran campuran (Rp ' . number_format($totalSplitPaid, 0, ',', '.') . ') kurang dari grand total (Rp ' . number_format($grandTotal, 0, ',', '.') . ').');
+                }
+
+                $paidAmount = $totalSplitPaid;
+                $changeAmount = max(0.0, $totalSplitPaid - $grandTotal);
+                $paymentStatus = 'paid';
+
+                // Kurangi kembalian dari porsi tunai terlebih dahulu agar jumlah bersih = grand_total
+                $remainingChange = $changeAmount;
+                foreach ($normalizedSplits as &$sp) {
+                    if ($sp['method'] === 'cash' && $remainingChange > 0) {
+                        $deduct = min($sp['amount'], $remainingChange);
+                        $sp['amount'] -= $deduct;
+                        $remainingChange -= $deduct;
+                    }
+                }
+                unset($sp);
+
+                if ($remainingChange > 0) {
+                    foreach ($normalizedSplits as &$sp) {
+                        if ($remainingChange > 0 && $sp['amount'] > 0) {
+                            $deduct = min($sp['amount'], $remainingChange);
+                            $sp['amount'] -= $deduct;
+                            $remainingChange -= $deduct;
+                        }
+                    }
+                    unset($sp);
+                }
+            } elseif ($paymentMethod === 'debt') {
                 if (!$customerId) {
                     throw new Exception('Transaksi hutang/tempo wajib memilih pelanggan terdaftar (tidak boleh Pelanggan Umum).');
                 }
@@ -229,8 +280,34 @@ class SaleService
                 );
             }
 
-            // Record cash in if cash payment or DP on debt
-            if ($paymentMethod === 'cash') {
+            // Record cash in if cash payment, split payment, or DP on debt
+            if ($paymentMethod === 'split') {
+                foreach ($normalizedSplits as $sp) {
+                    if ($sp['amount'] > 0 || $sp['tendered_amount'] > 0) {
+                        SalePayment::create([
+                            'sale_id' => $sale->id,
+                            'payment_method' => $sp['method'],
+                            'amount' => $sp['amount'],
+                            'tendered_amount' => $sp['tendered_amount'],
+                            'reference_note' => $sp['note'],
+                        ]);
+                    }
+                }
+
+                $netCashFromSplit = (float) collect($normalizedSplits)->where('method', 'cash')->sum('amount');
+                if ($netCashFromSplit > 0) {
+                    $this->cashService->recordTransaction(
+                        cashShiftId: $currentShift?->id,
+                        userId: $userId,
+                        type: 'in',
+                        category: 'sale',
+                        amount: $netCashFromSplit,
+                        refType: Sale::class,
+                        refId: $sale->id,
+                        description: "Penjualan POS Split (Porsi Tunai) #{$invoiceNumber}"
+                    );
+                }
+            } elseif ($paymentMethod === 'cash') {
                 $netCashReceived = $grandTotal; // Cash effectively retained
                 $this->cashService->recordTransaction(
                     cashShiftId: $currentShift?->id,
@@ -287,6 +364,24 @@ class SaleService
                 }
             }
 
+            // Jika ada Ongkos Kirim (shipping_cost > 0) dan dibayar tunai dari laci kasir ke kurir
+            $shippingPaidFromDrawer = array_key_exists('shipping_paid_from_drawer', $data)
+                ? (bool) $data['shipping_paid_from_drawer']
+                : true;
+
+            if ($shippingCost > 0 && $shippingPaidFromDrawer) {
+                $this->cashService->recordTransaction(
+                    cashShiftId: $currentShift?->id,
+                    userId: $userId,
+                    type: 'out',
+                    category: 'shipping',
+                    amount: $shippingCost,
+                    refType: Sale::class,
+                    refId: $sale->id,
+                    description: "Bayar Ongkir/Kurir dari Laci Kasir (Nota #{$invoiceNumber})"
+                );
+            }
+
             // Reward Customer Points (e.g. 1 point for every 10.000 spent)
             if ($customerId) {
                 $customer = Customer::find($customerId);
@@ -298,7 +393,7 @@ class SaleService
                 }
             }
 
-            return $sale->load(['details.product', 'customer', 'user']);
+            return $sale->load(['details.product', 'customer', 'user', 'payments']);
         });
     }
 }

@@ -135,7 +135,7 @@ class CashShiftController extends Controller
     {
         $cashShift->load([
             'user',
-            'sales' => fn ($q) => $q->with(['customer', 'details.product.unit'])->orderBy('transaction_date', 'asc'),
+            'sales' => fn ($q) => $q->with(['customer', 'details.product.unit', 'payments'])->orderBy('transaction_date', 'asc'),
             'transactions' => fn ($q) => $q->orderBy('transaction_date', 'asc'),
         ]);
         $summary = $this->cashService->calculateShiftSummary($cashShift);

@@ -69,7 +69,7 @@
                             <td>{{ $sale->customer?->name ?? 'Umum (Walk-in)' }}</td>
                             <td>
                                 <span class="badge bg-secondary-subtle text-secondary text-uppercase px-2 py-1">
-                                    {{ $sale->payment_method === 'debt' ? 'Hutang/Tempo' : $sale->payment_method }}
+                                    {{ $sale->payment_method === 'debt' ? 'Hutang/Tempo' : ($sale->payment_method === 'split' ? 'Split' : $sale->payment_method) }}
                                 </span>
                                 @if($sale->payment_status === 'unpaid')
                                     <span class="badge bg-danger-subtle text-danger">Belum Bayar</span>
@@ -77,6 +77,11 @@
                                     <span class="badge bg-warning-subtle text-warning">Cicilan</span>
                                 @else
                                     <span class="badge bg-success-subtle text-success">Lunas</span>
+                                @endif
+                                @if($sale->payment_method === 'split' && $sale->payments->isNotEmpty())
+                                    <div class="small text-muted mt-1" style="font-size: 0.7rem;">
+                                        {{ $sale->payments->map(fn($sp) => strtoupper($sp->payment_method) . ' ' . number_format($sp->amount, 0, ',', '.'))->implode(' + ') }}
+                                    </div>
                                 @endif
                             </td>
                             <td class="text-end">
