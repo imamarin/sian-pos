@@ -40,7 +40,7 @@
             </div>
             <div class="input-group mt-1">
                 <span class="input-group-text bg-light border-end-0 text-muted"><i class="bi bi-shield-lock"></i></span>
-                <input type="password" name="password" id="password" class="form-control border-start-0" value="password" placeholder="" required>
+                <input type="password" name="password" id="password" class="form-control border-start-0" placeholder="••••••••" required>
             </div>
         </div>
 
@@ -55,6 +55,7 @@
             <i class="bi bi-box-arrow-in-right me-1"></i> Masuk ke Sistem
         </button>
     </form>
+
 </div>
 
 <script>
