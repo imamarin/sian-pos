@@ -50,10 +50,21 @@
                             <td>{{ $ret->return_date?->format('d/m/Y H:i') ?? $ret->created_at?->format('d/m/Y H:i') ?? '-' }}</td>
                             <td>{{ $ret->sale?->customer?->name ?? 'Umum' }}</td>
                             <td>
-                                <span class="badge bg-secondary-subtle text-secondary text-uppercase">{{ $ret->refund_method }}</span>
+                                @if($ret->is_exchange)
+                                    <span class="badge bg-primary-subtle text-primary border border-primary-subtle">TUKAR BARANG</span>
+                                @elseif($ret->refund_method === 'credit')
+                                    <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle">POTONG PIUTANG</span>
+                                @else
+                                    <span class="badge bg-secondary-subtle text-secondary text-uppercase">{{ $ret->refund_method }}</span>
+                                @endif
                             </td>
-                            <td class="text-end fw-bold text-danger">
+                            <td class="text-end fw-bold {{ $ret->is_exchange ? 'text-primary' : 'text-danger' }}">
                                 Rp {{ number_format($ret->total_refund, 0, ',', '.') }}
+                                @if($ret->is_exchange)
+                                    <div class="small fw-normal text-muted" style="font-size: 0.72rem;">
+                                        Tukar: Rp {{ number_format($ret->exchange_total, 0, ',', '.') }}
+                                    </div>
+                                @endif
                             </td>
                             <td class="text-center">
                                 <a href="{{ route('returns.sales.show', $ret->id) }}" class="btn btn-sm btn-light border" title="Lihat Rincian Retur">

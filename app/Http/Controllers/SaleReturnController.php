@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Product;
 use App\Models\Sale;
 use App\Models\SaleReturn;
 use App\Services\ReturnService;
@@ -17,7 +18,7 @@ class SaleReturnController extends Controller
 
     public function index()
     {
-        $returns = SaleReturn::with(['sale.customer', 'user', 'details.product'])->latest('return_date')->paginate(15);
+        $returns = SaleReturn::with(['sale.customer', 'user', 'details.product', 'exchanges.product'])->latest('return_date')->paginate(15);
         return view('returns.sales.index', compact('returns'));
     }
 
@@ -31,19 +32,25 @@ class SaleReturnController extends Controller
         }
 
         $completedSales = Sale::where('status', 'completed')->latest('transaction_date')->limit(30)->get();
+        $products = Product::with('unit')->where('status', true)->orderBy('name')->get();
 
-        return view('returns.sales.create', compact('sale', 'completedSales'));
+        return view('returns.sales.create', compact('sale', 'completedSales', 'products'));
     }
 
     public function store(Request $request)
     {
         $validated = $request->validate([
             'sale_id' => ['required', 'exists:sales,id'],
-            'refund_method' => ['required', 'string', 'in:cash,credit,none'],
+            'refund_method' => ['required', 'string', 'in:cash,credit,exchange,none'],
             'items' => ['required', 'array', 'min:1'],
             'items.*.product_id' => ['required', 'exists:products,id'],
             'items.*.qty' => ['nullable', 'numeric', 'min:0'],
+            'items.*.item_condition' => ['nullable', 'string', 'in:good,damaged'],
             'items.*.reason' => ['nullable', 'string'],
+            'exchange_items' => ['nullable', 'array'],
+            'exchange_items.*.product_id' => ['nullable', 'exists:products,id'],
+            'exchange_items.*.qty' => ['nullable', 'numeric', 'min:0'],
+            'exchange_items.*.unit_price' => ['nullable', 'numeric', 'min:0'],
             'notes' => ['nullable', 'string'],
         ], [
             'items.required' => 'Pilih minimal satu barang yang diretur.',
@@ -66,7 +73,7 @@ class SaleReturnController extends Controller
             $saleReturn = $this->returnService->processSaleReturn($validated, Auth::id());
 
             return redirect()->route('returns.sales.show', $saleReturn->id)
-                ->with('success', "Retur penjualan #{$saleReturn->return_number} berhasil diproses dan stok telah dikembalikan ke inventori.");
+                ->with('success', "Retur penjualan #{$saleReturn->return_number} berhasil diproses.");
         } catch (Exception $e) {
             return back()->withInput()->with('error', 'Gagal memproses retur: ' . $e->getMessage());
         }
@@ -74,7 +81,7 @@ class SaleReturnController extends Controller
 
     public function show(SaleReturn $saleReturn)
     {
-        $saleReturn->load(['sale.customer', 'user', 'details.product.unit']);
+        $saleReturn->load(['sale.customer', 'user', 'details.product.unit', 'exchanges.product.unit']);
         return view('returns.sales.show', compact('saleReturn'));
     }
 }

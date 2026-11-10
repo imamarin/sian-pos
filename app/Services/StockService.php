@@ -91,4 +91,36 @@ class StockService
             'notes' => $notes ?? 'Opname fisik cocok dengan sistem',
         ]);
     }
+
+    /**
+     * Record a damaged customer return without adding the damaged items back to sellable stock.
+     * Records qty_out = $qty with type = 'adjustment' and reference_type = SaleReturn::class
+     * so it is compatible with MySQL enum and tracked in Stock Shrinkage / Loss report.
+     */
+    public function recordDamagedReturn(
+        Product|int $product,
+        float|int $qty,
+        ?int $userId = null,
+        ?string $refType = null,
+        ?int $refId = null,
+        ?string $notes = null
+    ): StockMovement {
+        $productId = $product instanceof Product ? $product->id : $product;
+        $lockedProduct = Product::where('id', $productId)->lockForUpdate()->firstOrFail();
+
+        $currentStock = (float) $lockedProduct->stock;
+
+        return StockMovement::create([
+            'product_id' => $lockedProduct->id,
+            'user_id' => $userId,
+            'type' => 'adjustment',
+            'reference_type' => $refType,
+            'reference_id' => $refId,
+            'qty_in' => 0,
+            'qty_out' => $qty,
+            'stock_before' => $currentStock,
+            'stock_after' => $currentStock,
+            'notes' => $notes ?? 'Barang rusak retur penjualan (tidak masuk stok layak jual)',
+        ]);
+    }
 }

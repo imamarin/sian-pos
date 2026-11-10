@@ -106,7 +106,7 @@ class ReportService
      */
     public function getProfitLossReport(Carbon $start, Carbon $end): array
     {
-        $sales = Sale::with(['details', 'returns.details'])
+        $sales = Sale::with(['details', 'returns.details', 'returns.exchanges'])
             ->whereBetween('transaction_date', [$start, $end])
             ->where('status', 'completed')
             ->get();
@@ -127,14 +127,20 @@ class ReportService
             }
 
             foreach ($sale->returns as $saleReturn) {
-                if ($saleReturn->refund_method === 'none') {
+                if ($saleReturn->is_exchange && $saleReturn->exchanges->isEmpty() && (float) $saleReturn->exchange_total <= 0) {
                     continue;
                 }
-                $totalReturns += (float) $saleReturn->total_refund;
+
+                $totalReturns += $saleReturn->net_returned_amount;
+
                 foreach ($saleReturn->details as $retDetail) {
                     $origDetail = $sale->details->firstWhere('product_id', $retDetail->product_id);
-                    $unitCost = (float) ($origDetail?->cost_price ?? 0);
+                    $unitCost = (float) ($retDetail->cost_price > 0 ? $retDetail->cost_price : ($origDetail?->cost_price ?? 0));
                     $returnedCogs += ($unitCost * (float) $retDetail->qty);
+                }
+
+                foreach ($saleReturn->exchanges as $exDetail) {
+                    $returnedCogs -= ((float) $exDetail->cost_price * (float) $exDetail->qty);
                 }
             }
         }
@@ -273,7 +279,7 @@ class ReportService
     public function getStockShrinkageReport(Carbon $start, Carbon $end, ?int $categoryId = null, ?string $reason = null): array
     {
         $query = \App\Models\StockMovement::with(['product.category', 'product.unit', 'user'])
-            ->whereIn('type', ['adjustment', 'opname'])
+            ->whereIn('type', ['adjustment', 'opname', 'damaged_return'])
             ->where('qty_out', '>', 0)
             ->whereBetween('created_at', [$start, $end]);
 
@@ -785,7 +791,7 @@ class ReportService
      */
     public function getIncomeReport(Carbon $start, Carbon $end): array
     {
-        $sales = Sale::with(['details', 'returns.details', 'paymentAllocations.receivablePayment', 'payments'])
+        $sales = Sale::with(['details', 'returns.details', 'returns.exchanges', 'paymentAllocations.receivablePayment', 'payments'])
             ->where('status', 'completed')
             ->whereBetween('transaction_date', [$start, $end])
             ->orderBy('transaction_date', 'asc')
@@ -861,18 +867,21 @@ class ReportService
                 $saleModal += ((float) $detail->qty * (float) $detail->cost_price);
             }
 
-            // Hitung potongan retur pada nota penjualan ini (kecuali tukar barang tanpa refund)
+            // Hitung potongan retur pada nota penjualan ini (memperhitungkan tukar barang)
             $returnedRevenue = 0.0;
             $returnedModal = 0.0;
             foreach ($sale->returns as $saleReturn) {
-                if ($saleReturn->refund_method === 'none') {
+                if ($saleReturn->is_exchange && $saleReturn->exchanges->isEmpty() && (float) $saleReturn->exchange_total <= 0) {
                     continue;
                 }
-                $returnedRevenue += (float) $saleReturn->total_refund;
+                $returnedRevenue += $saleReturn->net_returned_amount;
                 foreach ($saleReturn->details as $retDetail) {
                     $origDetail = $sale->details->firstWhere('product_id', $retDetail->product_id);
-                    $unitCost = (float) ($origDetail?->cost_price ?? 0);
+                    $unitCost = (float) ($retDetail->cost_price > 0 ? $retDetail->cost_price : ($origDetail?->cost_price ?? 0));
                     $returnedModal += ($unitCost * (float) $retDetail->qty);
+                }
+                foreach ($saleReturn->exchanges as $exDetail) {
+                    $returnedModal -= ((float) $exDetail->cost_price * (float) $exDetail->qty);
                 }
             }
 

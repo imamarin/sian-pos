@@ -154,14 +154,28 @@
                                         <span class="badge bg-success-subtle text-success">Penjualan</span>
                                         @break
                                     @case('sale_return')
-                                        <span class="badge bg-info-subtle text-info">Retur Jual</span>
+                                        @if($m->qty_out > 0)
+                                            <span class="badge bg-primary-subtle text-primary">Tukar Barang (Keluar)</span>
+                                        @else
+                                            <span class="badge bg-info-subtle text-info">Retur Jual (Layak)</span>
+                                        @endif
+                                        @break
+                                    @case('damaged_return')
+                                        <span class="badge bg-danger-subtle text-danger">Retur Rusak (Non-Stok)</span>
+                                        @break
+                                    @case('sale_exchange')
+                                        <span class="badge bg-primary-subtle text-primary">Tukar Barang (Keluar)</span>
                                         @break
                                     @case('purchase_return')
                                         <span class="badge bg-danger-subtle text-danger">Retur Beli</span>
                                         @break
                                     @case('adjustment')
                                     @case('opname')
-                                        <span class="badge bg-warning-subtle text-warning">Penyesuaian/Opname</span>
+                                        @if($m->reference_type === \App\Models\SaleReturn::class)
+                                            <span class="badge bg-danger-subtle text-danger">Retur Rusak (Non-Stok)</span>
+                                        @else
+                                            <span class="badge bg-warning-subtle text-warning">Penyesuaian/Opname</span>
+                                        @endif
                                         @break
                                     @default
                                         <span class="badge bg-light text-dark">{{ $m->type }}</span>
@@ -171,7 +185,11 @@
                                 {{ $m->qty_in > 0 ? '+' . $m->qty_in : '-' }}
                             </td>
                             <td class="text-center fw-bold text-danger">
-                                {{ $m->qty_out > 0 ? '-' . $m->qty_out : '-' }}
+                                @if($m->type === 'damaged_return' || ($m->type === 'adjustment' && $m->reference_type === \App\Models\SaleReturn::class))
+                                    <span class="badge bg-danger-subtle text-danger border border-danger-subtle" title="Barang rusak tidak masuk stok layak jual">Rusak: {{ $m->qty_out }}</span>
+                                @else
+                                    {{ $m->qty_out > 0 ? '-' . $m->qty_out : '-' }}
+                                @endif
                             </td>
                             <td class="text-center fw-bold">
                                 {{ $m->stock_after }}

@@ -1060,7 +1060,134 @@ class DebtSystemTest extends TestCase
             ->assertStatus(200)
             ->assertSee('% Selisih');
     }
+
+    public function test_sale_return_damaged_item_does_not_restock_and_records_shrinkage(): void
+    {
+        $admin = User::where('username', 'admin')->first();
+        $product = Product::first();
+        $product->update([
+            'stock' => 20,
+            'cost_price' => 12000,
+            'selling_price' => 20000,
+        ]);
+
+        // 1. Checkout 2 units of product (stock becomes 18)
+        $this->actingAs($admin)->postJson(route('pos.checkout'), [
+            'payment_method' => 'cash',
+            'paid_amount' => 40000,
+            'items' => [
+                ['product_id' => $product->id, 'qty' => 2],
+            ],
+        ])->assertStatus(200);
+
+        $this->assertEquals(18, $product->fresh()->stock);
+        $sale = Sale::latest('id')->first();
+
+        // 2. Return 1 unit as DAMAGED ('damaged') with cash refund
+        $returnService = app(\App\Services\ReturnService::class);
+        $saleReturn = $returnService->processSaleReturn([
+            'sale_id' => $sale->id,
+            'refund_method' => 'cash',
+            'items' => [
+                [
+                    'product_id' => $product->id,
+                    'qty' => 1,
+                    'item_condition' => 'damaged',
+                    'reason' => 'Kemasan pecah',
+                ],
+            ],
+        ], $admin->id);
+
+        // Sellable stock MUST remain 18 (not increased to 19!)
+        $this->assertEquals(18, $product->fresh()->stock);
+        $this->assertEquals('damaged', $saleReturn->details->first()->item_condition);
+
+        // Damaged return must appear in Stock Shrinkage Report & Profit Loss Report
+        $reportService = app(\App\Services\ReportService::class);
+        $shrinkage = $reportService->getStockShrinkageReport(now()->startOfDay(), now()->endOfDay());
+        $this->assertEquals(1, $shrinkage['summary']['total_items']);
+        $this->assertEquals(12000.0, $shrinkage['summary']['total_loss']);
+
+        $pl = $reportService->getProfitLossReport(now()->startOfDay(), now()->endOfDay());
+        // 1 net unit sold: revenue 20.000, COGS 12.000, plus 12.000 shrinkage from 1 damaged return => gross_profit = -4.000
+        $this->assertEquals(20000.0, $pl['total_product_revenue']);
+        $this->assertEquals(12000.0, $pl['total_cogs']);
+        $this->assertEquals(12000.0, $pl['stock_shrinkage']);
+        $this->assertEquals(-4000.0, $pl['gross_profit']);
+    }
+
+    public function test_sale_return_flexible_exchange_option_b_with_same_and_different_products(): void
+    {
+        $admin = User::where('username', 'admin')->first();
+        $products = Product::take(2)->get();
+        $prodA = $products[0];
+        $prodB = $products[1];
+
+        $prodA->update(['stock' => 10, 'cost_price' => 7000, 'selling_price' => 10000]);
+        $prodB->update(['stock' => 10, 'cost_price' => 10000, 'selling_price' => 15000]);
+
+        // 1. Customer buys 2 units of prodA (total Rp 20.000, prodA stock becomes 8)
+        $this->actingAs($admin)->postJson(route('pos.checkout'), [
+            'payment_method' => 'cash',
+            'paid_amount' => 20000,
+            'items' => [
+                ['product_id' => $prodA->id, 'qty' => 2],
+            ],
+        ])->assertStatus(200);
+
+        $this->assertEquals(8, $prodA->fresh()->stock);
+        $sale = Sale::latest('id')->first();
+
+        $returnService = app(\App\Services\ReturnService::class);
+
+        // 2. Scenario A: Customer returns 1 DAMAGED prodA (Rp 10.000) and exchanges for 1 new prodA (Rp 10.000)
+        $ret1 = $returnService->processSaleReturn([
+            'sale_id' => $sale->id,
+            'refund_method' => 'exchange',
+            'items' => [
+                ['product_id' => $prodA->id, 'qty' => 1, 'item_condition' => 'damaged', 'reason' => 'Bocor'],
+            ],
+            'exchange_items' => [
+                ['product_id' => $prodA->id, 'qty' => 1, 'unit_price' => 10000],
+            ],
+        ], $admin->id);
+
+        // Damaged item didn't add stock (+0), replacement item took 1 from stock (-1) => prodA stock is now 7
+        $this->assertEquals(7, $prodA->fresh()->stock);
+        $this->assertEquals(10000.0, (float) $ret1->total_refund);
+        $this->assertEquals(10000.0, (float) $ret1->exchange_total);
+        $this->assertEquals(0.0, (float) $ret1->exchange_balance);
+
+        // 3. Scenario B: Customer returns remaining 1 GOOD prodA (Rp 10.000) and exchanges for 1 prodB (Rp 15.000)
+        $ret2 = $returnService->processSaleReturn([
+            'sale_id' => $sale->id,
+            'refund_method' => 'exchange',
+            'items' => [
+                ['product_id' => $prodA->id, 'qty' => 1, 'item_condition' => 'good', 'reason' => 'Tukar ke Produk B'],
+            ],
+            'exchange_items' => [
+                ['product_id' => $prodB->id, 'qty' => 1, 'unit_price' => 15000],
+            ],
+        ], $admin->id);
+
+        // Good prodA returned to stock (7 + 1 = 8), prodB deducted by 1 (10 - 1 = 9)
+        $this->assertEquals(8, $prodA->fresh()->stock);
+        $this->assertEquals(9, $prodB->fresh()->stock);
+        $this->assertEquals(10000.0, (float) $ret2->total_refund);
+        $this->assertEquals(15000.0, (float) $ret2->exchange_total);
+        // Customer paid additional Rp 5.000
+        $this->assertEquals(5000.0, (float) $ret2->exchange_balance);
+
+        // Verify cash in transaction recorded for the +Rp 5.000 difference
+        $cashIn = \App\Models\CashTransaction::where('reference_type', \App\Models\SaleReturn::class)
+            ->where('reference_id', $ret2->id)
+            ->where('type', 'in')
+            ->first();
+        $this->assertNotNull($cashIn);
+        $this->assertEquals(5000.0, (float) $cashIn->amount);
+    }
 }
+
 
 
 

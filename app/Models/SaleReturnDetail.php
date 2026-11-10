@@ -13,7 +13,9 @@ class SaleReturnDetail extends Model
         'sale_return_id',
         'product_id',
         'qty',
+        'item_condition',
         'refund_price',
+        'cost_price',
         'subtotal',
         'reason',
     ];
@@ -23,6 +25,7 @@ class SaleReturnDetail extends Model
         return [
             'qty' => 'integer',
             'refund_price' => 'decimal:2',
+            'cost_price' => 'decimal:2',
             'subtotal' => 'decimal:2',
         ];
     }

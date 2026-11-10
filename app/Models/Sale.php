@@ -99,19 +99,13 @@ class Sale extends Model
     }
 
     /**
-     * Total nominal barang yang diretur pada nota ini (di luar tukar barang tanpa refund).
+     * Total nominal bersih yang diretur pada nota ini (memperhitungkan selisih tukar barang).
      */
     public function getTotalReturnedAttribute(): float
     {
-        if ($this->relationLoaded('returns')) {
-            return (float) $this->returns
-                ->where('refund_method', '!=', 'none')
-                ->sum('total_refund');
-        }
+        $returns = $this->relationLoaded('returns') ? $this->returns : $this->returns()->get();
 
-        return (float) $this->returns()
-            ->where('refund_method', '!=', 'none')
-            ->sum('total_refund');
+        return (float) $returns->sum(fn (SaleReturn $r) => $r->net_returned_amount);
     }
 
     /**

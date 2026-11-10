@@ -14,6 +14,7 @@ use App\Models\ReceivablePaymentAllocation;
 use App\Models\Sale;
 use App\Models\SaleReturn;
 use App\Models\SaleReturnDetail;
+use App\Models\SaleReturnExchange;
 use Carbon\Carbon;
 use Exception;
 use Illuminate\Support\Facades\DB;
@@ -43,14 +44,14 @@ class ReturnService
     }
 
     /**
-     * Process customer sale return.
+     * Process customer sale return (supports item condition: good/damaged & product exchange Opsi B).
      *
      * @throws Exception
      */
     public function processSaleReturn(array $data, int $userId): SaleReturn
     {
         return DB::transaction(function () use ($data, $userId) {
-            $sale = Sale::with('details')->findOrFail($data['sale_id']);
+            $sale = Sale::with(['details', 'customer'])->findOrFail($data['sale_id']);
             $items = $data['items'] ?? [];
 
             if (empty($items)) {
@@ -60,13 +61,18 @@ class ReturnService
             $currentShift = CashShift::where('user_id', $userId)->where('status', 'open')->first();
             $returnNumber = $this->generateSaleReturnNumber();
             $refundMethod = $data['refund_method'] ?? 'cash';
-            $totalRefund = 0;
+            $isExchange = in_array($refundMethod, ['exchange', 'none'], true);
+            $totalRefund = 0.0;
             $itemsToProcess = [];
 
             foreach ($items as $item) {
                 $productId = (int) $item['product_id'];
                 $qty = (int) ($item['qty'] ?? 0);
-                $reason = $item['reason'] ?? 'Barang cacat/tukar';
+                $rawCondition = $item['item_condition'] ?? 'good';
+                $itemCondition = in_array($rawCondition, ['good', 'damaged'], true)
+                    ? $rawCondition
+                    : 'good';
+                $reason = $item['reason'] ?? ($itemCondition === 'damaged' ? 'Barang rusak/cacat' : 'Retur/tukar barang');
 
                 if ($qty <= 0) {
                     continue;
@@ -89,13 +95,16 @@ class ReturnService
                 }
 
                 $refundPrice = (float) $saleDetail->selling_price;
+                $costPrice = (float) ($saleDetail->cost_price ?? 0);
                 $lineRefund = $refundPrice * $qty;
                 $totalRefund += $lineRefund;
 
                 $itemsToProcess[] = [
                     'product_id' => $productId,
                     'qty' => $qty,
+                    'item_condition' => $itemCondition,
                     'refund_price' => $refundPrice,
+                    'cost_price' => $costPrice,
                     'subtotal' => $lineRefund,
                     'reason' => $reason,
                 ];
@@ -105,6 +114,55 @@ class ReturnService
                 throw new Exception('Tidak ada item valid yang dipilih untuk retur.');
             }
 
+            // Prepare replacement items if method is exchange / none
+            $exchangeItemsInput = $data['exchange_items'] ?? [];
+            $exchangesToProcess = [];
+            $exchangeTotal = 0.0;
+
+            if ($isExchange) {
+                $validExchangeInputs = collect($exchangeItemsInput)
+                    ->filter(fn ($ex) => !empty($ex['product_id']) && (int) ($ex['qty'] ?? 0) > 0)
+                    ->values()
+                    ->all();
+
+                // Jika memilih metode Tukar Barang tapi tidak mengisi baris pengganti, otomatis default 1-to-1 barang yang sama
+                if (empty($validExchangeInputs)) {
+                    foreach ($itemsToProcess as $retItem) {
+                        $validExchangeInputs[] = [
+                            'product_id' => $retItem['product_id'],
+                            'qty' => $retItem['qty'],
+                            'unit_price' => $retItem['refund_price'],
+                        ];
+                    }
+                }
+
+                $memberLevel = $sale->customer?->member_level ?? 'regular';
+
+                foreach ($validExchangeInputs as $exInput) {
+                    $exProduct = Product::findOrFail((int) $exInput['product_id']);
+                    $exQty = (int) $exInput['qty'];
+                    $exUnitPrice = isset($exInput['unit_price']) && $exInput['unit_price'] !== '' && $exInput['unit_price'] !== null
+                        ? (float) $exInput['unit_price']
+                        : (float) $exProduct->getPriceForLevel($memberLevel);
+                    $exCostPrice = (float) $exProduct->cost_price;
+                    $exSubtotal = round($exUnitPrice * $exQty, 2);
+
+                    $exchangeTotal += $exSubtotal;
+
+                    $exchangesToProcess[] = [
+                        'product_id' => $exProduct->id,
+                        'qty' => $exQty,
+                        'cost_price' => $exCostPrice,
+                        'unit_price' => $exUnitPrice,
+                        'subtotal' => $exSubtotal,
+                    ];
+                }
+            }
+
+            $exchangeBalance = $isExchange
+                ? round($exchangeTotal - $totalRefund, 2)
+                : round(-$totalRefund, 2);
+
             $saleReturn = SaleReturn::create([
                 'return_number' => $returnNumber,
                 'sale_id' => $sale->id,
@@ -112,85 +170,190 @@ class ReturnService
                 'cash_shift_id' => $currentShift?->id,
                 'return_date' => Carbon::now(),
                 'total_refund' => $totalRefund,
+                'exchange_total' => $exchangeTotal,
+                'exchange_balance' => $exchangeBalance,
                 'refund_method' => $refundMethod,
                 'notes' => $data['notes'] ?? null,
             ]);
 
+            // 1. Proses barang yang dikembalikan pelanggan (Layak Jual vs Barang Rusak)
             foreach ($itemsToProcess as $pItem) {
                 SaleReturnDetail::create([
                     'sale_return_id' => $saleReturn->id,
                     'product_id' => $pItem['product_id'],
                     'qty' => $pItem['qty'],
+                    'item_condition' => $pItem['item_condition'],
                     'refund_price' => $pItem['refund_price'],
+                    'cost_price' => $pItem['cost_price'],
                     'subtotal' => $pItem['subtotal'],
                     'reason' => $pItem['reason'],
                 ]);
 
-                // Restore stock back into product inventory
+                if ($pItem['item_condition'] === 'damaged') {
+                    // Barang rusak TIDAK menambah stok layak jual, tetapi tercatat sebagai penyusutan/kerugian stok
+                    $this->stockService->recordDamagedReturn(
+                        product: $pItem['product_id'],
+                        qty: $pItem['qty'],
+                        userId: $userId,
+                        refType: SaleReturn::class,
+                        refId: $saleReturn->id,
+                        notes: "Barang Rusak Retur Penjualan #{$returnNumber} dari Nota #{$sale->invoice_number} ({$pItem['reason']})"
+                    );
+                } else {
+                    // Barang layak jual dikembalikan ke inventori utama (+qty)
+                    $this->stockService->recordMovement(
+                        product: $pItem['product_id'],
+                        type: 'sale_return',
+                        qtyIn: $pItem['qty'],
+                        qtyOut: 0,
+                        userId: $userId,
+                        refType: SaleReturn::class,
+                        refId: $saleReturn->id,
+                        notes: "Retur Penjualan (Layak Jual) #{$returnNumber} dari Nota #{$sale->invoice_number}"
+                    );
+                }
+            }
+
+            // 2. Proses barang pengganti yang keluar dari stok toko (jika Tukar Barang)
+            foreach ($exchangesToProcess as $exItem) {
+                SaleReturnExchange::create([
+                    'sale_return_id' => $saleReturn->id,
+                    'product_id' => $exItem['product_id'],
+                    'qty' => $exItem['qty'],
+                    'cost_price' => $exItem['cost_price'],
+                    'unit_price' => $exItem['unit_price'],
+                    'subtotal' => $exItem['subtotal'],
+                ]);
+
                 $this->stockService->recordMovement(
-                    product: $pItem['product_id'],
+                    product: $exItem['product_id'],
                     type: 'sale_return',
-                    qtyIn: $pItem['qty'],
-                    qtyOut: 0,
+                    qtyIn: 0,
+                    qtyOut: $exItem['qty'],
                     userId: $userId,
                     refType: SaleReturn::class,
                     refId: $saleReturn->id,
-                    notes: "Retur Penjualan #{$returnNumber} dari Nota #{$sale->invoice_number}"
+                    notes: "Barang Pengganti Tukar Retur #{$returnNumber} (Nota #{$sale->invoice_number})"
                 );
             }
 
-            // 1. Jika nota penjualan masih memiliki sisa piutang (hutang pelanggan), otomatis potong sisa hutang terlebih dahulu
+            // 3. Penyesuaian Kas & Piutang
             $remainingDebt = max(0.0, (float) $sale->grand_total - (float) $sale->paid_amount);
             $debtReduced = 0.0;
 
-            if ($refundMethod !== 'none' && $remainingDebt > 0 && $totalRefund > 0) {
-                $debtReduced = min((float) $totalRefund, $remainingDebt);
+            if ($isExchange) {
+                if ($exchangeBalance > 0) {
+                    // Nilai barang pengganti lebih mahal -> Pelanggan tambah bayar ke kasir
+                    $this->cashService->recordTransaction(
+                        cashShiftId: $currentShift?->id,
+                        userId: $userId,
+                        type: 'in',
+                        category: 'sale',
+                        amount: $exchangeBalance,
+                        refType: SaleReturn::class,
+                        refId: $saleReturn->id,
+                        description: "Tambah Bayar Tukar Barang Retur #{$returnNumber}"
+                    );
+                } elseif ($exchangeBalance < 0) {
+                    // Nilai barang pengganti lebih murah -> Selisih lebihnya potong piutang dulu, sisanya kembalikan tunai
+                    $excessRefund = abs($exchangeBalance);
+                    if ($remainingDebt > 0) {
+                        $debtReduced = min($excessRefund, $remainingDebt);
 
-                if ($sale->customer_id) {
-                    $paymentNumber = $this->debtService->generateReceivablePaymentNumber();
-                    $receivablePayment = ReceivablePayment::create([
-                        'payment_number' => $paymentNumber,
-                        'customer_id' => $sale->customer_id,
-                        'user_id' => $userId,
-                        'cash_shift_id' => $currentShift?->id,
-                        'payment_date' => Carbon::now(),
-                        'total_paid' => $debtReduced,
-                        'payment_method' => 'return',
-                        'notes' => "Potongan Retur Penjualan #{$returnNumber} (Nota #{$sale->invoice_number})",
-                    ]);
+                        if ($sale->customer_id) {
+                            $paymentNumber = $this->debtService->generateReceivablePaymentNumber();
+                            $receivablePayment = ReceivablePayment::create([
+                                'payment_number' => $paymentNumber,
+                                'customer_id' => $sale->customer_id,
+                                'user_id' => $userId,
+                                'cash_shift_id' => $currentShift?->id,
+                                'payment_date' => Carbon::now(),
+                                'total_paid' => $debtReduced,
+                                'payment_method' => 'return',
+                                'notes' => "Potongan Selisih Tukar Barang #{$returnNumber} (Nota #{$sale->invoice_number})",
+                            ]);
 
-                    ReceivablePaymentAllocation::create([
-                        'receivable_payment_id' => $receivablePayment->id,
-                        'sale_id' => $sale->id,
-                        'amount' => $debtReduced,
+                            ReceivablePaymentAllocation::create([
+                                'receivable_payment_id' => $receivablePayment->id,
+                                'sale_id' => $sale->id,
+                                'amount' => $debtReduced,
+                            ]);
+                        }
+
+                        $newPaidAmount = round((float) $sale->paid_amount + $debtReduced, 2);
+                        $newStatus = $newPaidAmount >= (float) $sale->grand_total ? 'paid' : 'partial';
+
+                        $sale->update([
+                            'paid_amount' => $newPaidAmount,
+                            'payment_status' => $newStatus,
+                        ]);
+                    }
+
+                    $cashRefundAmount = max(0.0, round($excessRefund - $debtReduced, 2));
+                    if ($cashRefundAmount > 0) {
+                        $this->cashService->recordTransaction(
+                            cashShiftId: $currentShift?->id,
+                            userId: $userId,
+                            type: 'out',
+                            category: 'refund',
+                            amount: $cashRefundAmount,
+                            refType: SaleReturn::class,
+                            refId: $saleReturn->id,
+                            description: "Kembalian Selisih Tukar Barang Retur #{$returnNumber}"
+                        );
+                    }
+                }
+            } else {
+                // Refund normal (cash / credit)
+                if ($remainingDebt > 0 && $totalRefund > 0) {
+                    $debtReduced = min((float) $totalRefund, $remainingDebt);
+
+                    if ($sale->customer_id) {
+                        $paymentNumber = $this->debtService->generateReceivablePaymentNumber();
+                        $receivablePayment = ReceivablePayment::create([
+                            'payment_number' => $paymentNumber,
+                            'customer_id' => $sale->customer_id,
+                            'user_id' => $userId,
+                            'cash_shift_id' => $currentShift?->id,
+                            'payment_date' => Carbon::now(),
+                            'total_paid' => $debtReduced,
+                            'payment_method' => 'return',
+                            'notes' => "Potongan Retur Penjualan #{$returnNumber} (Nota #{$sale->invoice_number})",
+                        ]);
+
+                        ReceivablePaymentAllocation::create([
+                            'receivable_payment_id' => $receivablePayment->id,
+                            'sale_id' => $sale->id,
+                            'amount' => $debtReduced,
+                        ]);
+                    }
+
+                    $newPaidAmount = round((float) $sale->paid_amount + $debtReduced, 2);
+                    $newStatus = $newPaidAmount >= (float) $sale->grand_total ? 'paid' : 'partial';
+
+                    $sale->update([
+                        'paid_amount' => $newPaidAmount,
+                        'payment_status' => $newStatus,
                     ]);
                 }
 
-                $newPaidAmount = round((float) $sale->paid_amount + $debtReduced, 2);
-                $newStatus = $newPaidAmount >= (float) $sale->grand_total ? 'paid' : 'partial';
-
-                $sale->update([
-                    'paid_amount' => $newPaidAmount,
-                    'payment_status' => $newStatus,
-                ]);
+                // Kurangi kas laci kasir hanya sebesar sisa nilai refund setelah memotong hutang (jika metode = cash)
+                $cashRefundAmount = max(0.0, round((float) $totalRefund - $debtReduced, 2));
+                if ($refundMethod === 'cash' && $cashRefundAmount > 0) {
+                    $this->cashService->recordTransaction(
+                        cashShiftId: $currentShift?->id,
+                        userId: $userId,
+                        type: 'out',
+                        category: 'refund',
+                        amount: $cashRefundAmount,
+                        refType: SaleReturn::class,
+                        refId: $saleReturn->id,
+                        description: "Refund Kas Retur Penjualan #{$returnNumber}"
+                    );
+                }
             }
 
-            // 2. Kurangi kas laci kasir hanya sebesar sisa nilai refund setelah memotong hutang (jika metode = cash)
-            $cashRefundAmount = max(0.0, round((float) $totalRefund - $debtReduced, 2));
-            if ($refundMethod === 'cash' && $cashRefundAmount > 0) {
-                $this->cashService->recordTransaction(
-                    cashShiftId: $currentShift?->id,
-                    userId: $userId,
-                    type: 'out',
-                    category: 'refund',
-                    amount: $cashRefundAmount,
-                    refType: SaleReturn::class,
-                    refId: $saleReturn->id,
-                    description: "Refund Kas Retur Penjualan #{$returnNumber}"
-                );
-            }
-
-            return $saleReturn->load(['details.product', 'sale']);
+            return $saleReturn->load(['details.product', 'exchanges.product', 'sale']);
         });
     }
 
