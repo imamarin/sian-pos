@@ -24,6 +24,8 @@
                         <th>Tanggal Opname</th>
                         <th>Petugas Pelaksana</th>
                         <th class="text-center">Jumlah Item Diperiksa</th>
+                        <th class="text-center">Total Selisih</th>
+                        <th class="text-center">% Selisih</th>
                         <th>Catatan</th>
                         <th class="text-center">Status</th>
                         <th class="text-center" style="width: 100px;">Aksi</th>
@@ -31,6 +33,15 @@
                 </thead>
                 <tbody>
                     @forelse($opnames as $index => $op)
+                        @php
+                            $opSysStock = (int) $op->details->sum('system_stock');
+                            $opPhysStock = (int) $op->details->sum('physical_stock');
+                            $opDiff = (int) $op->details->sum('difference');
+                            $opPct = $opSysStock > 0 ? round(($opDiff / $opSysStock) * 100, 2) : ($opPhysStock > 0 ? 100.0 : 0.0);
+                            $opPctText = $opPct == 0
+                                ? '0%'
+                                : ($opPct > 0 ? '+' : '-') . rtrim(rtrim(number_format(abs($opPct), 2, ',', '.'), '0'), ',') . '%';
+                        @endphp
                         <tr>
                             <td>{{ $opnames->firstItem() + $index }}</td>
                             <td><span class="badge bg-light text-primary border font-monospace fs-6">{{ $op->opname_number }}</span></td>
@@ -40,6 +51,24 @@
                                 <span class="badge bg-secondary-subtle text-secondary px-3 py-1 rounded-pill">
                                     {{ $op->details->count() }} Produk
                                 </span>
+                            </td>
+                            <td class="text-center">
+                                @if($opDiff > 0)
+                                    <span class="badge bg-success px-2 py-1">+{{ $opDiff }}</span>
+                                @elseif($opDiff < 0)
+                                    <span class="badge bg-danger px-2 py-1">{{ $opDiff }}</span>
+                                @else
+                                    <span class="badge bg-secondary px-2 py-1">0</span>
+                                @endif
+                            </td>
+                            <td class="text-center">
+                                @if($opDiff > 0)
+                                    <span class="badge bg-success-subtle text-success border border-success-subtle px-2 py-1">{{ $opPctText }}</span>
+                                @elseif($opDiff < 0)
+                                    <span class="badge bg-danger-subtle text-danger border border-danger-subtle px-2 py-1">{{ $opPctText }}</span>
+                                @else
+                                    <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle px-2 py-1">0%</span>
+                                @endif
                             </td>
                             <td class="small text-muted">{{ $op->notes ?? '-' }}</td>
                             <td class="text-center">
@@ -55,7 +84,7 @@
                         </tr>
                     @empty
                         <tr>
-                            <td colspan="8" class="text-center py-5 text-muted">Belum ada riwayat pelaksanaan stok opname.</td>
+                            <td colspan="10" class="text-center py-5 text-muted">Belum ada riwayat pelaksanaan stok opname.</td>
                         </tr>
                     @endforelse
                 </tbody>

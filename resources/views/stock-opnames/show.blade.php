@@ -55,6 +55,7 @@
                         <th class="text-center">Stok Sistem</th>
                         <th class="text-center">Stok Fisik Nyata</th>
                         <th class="text-center">Selisih Unit</th>
+                        <th class="text-center">% Selisih</th>
                         <th class="text-end">Harga Modal (HPP)</th>
                         <th class="text-end">Estimasi Nilai Selisih</th>
                         <th>Keterangan</th>
@@ -63,11 +64,17 @@
                 <tbody>
                     @php
                         $totalDiffValue = 0;
+                        $totalSystemStock = 0;
+                        $totalPhysicalStock = 0;
+                        $totalDiffUnit = 0;
                     @endphp
                     @foreach($stockOpname->details as $index => $det)
                         @php
                             $diffValue = $det->difference * $det->cost_price;
                             $totalDiffValue += $diffValue;
+                            $totalSystemStock += $det->system_stock;
+                            $totalPhysicalStock += $det->physical_stock;
+                            $totalDiffUnit += $det->difference;
                         @endphp
                         <tr>
                             <td>{{ $index + 1 }}</td>
@@ -84,6 +91,15 @@
                                     <span class="badge bg-secondary px-3 py-1">Cocok (0)</span>
                                 @endif
                             </td>
+                            <td class="text-center">
+                                @if($det->difference > 0)
+                                    <span class="badge bg-success-subtle text-success border border-success-subtle px-2 py-1">{{ $det->formatted_difference_percentage }}</span>
+                                @elseif($det->difference < 0)
+                                    <span class="badge bg-danger-subtle text-danger border border-danger-subtle px-2 py-1">{{ $det->formatted_difference_percentage }}</span>
+                                @else
+                                    <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle px-2 py-1">0%</span>
+                                @endif
+                            </td>
                             <td class="text-end text-muted small">Rp {{ number_format($det->cost_price, 0, ',', '.') }}</td>
                             <td class="text-end fw-bold {{ $diffValue < 0 ? 'text-danger' : ($diffValue > 0 ? 'text-success' : 'text-muted') }}">
                                 {{ $diffValue > 0 ? '+' : '' }}Rp {{ number_format($diffValue, 0, ',', '.') }}
@@ -92,9 +108,28 @@
                         </tr>
                     @endforeach
                 </tbody>
+                @php
+                    if ($totalSystemStock > 0) {
+                        $totalDiffPct = round(($totalDiffUnit / $totalSystemStock) * 100, 2);
+                    } else {
+                        $totalDiffPct = $totalPhysicalStock > 0 ? 100.0 : 0.0;
+                    }
+                    $formattedTotalDiffPct = $totalDiffPct == 0
+                        ? '0%'
+                        : ($totalDiffPct > 0 ? '+' : '-') . rtrim(rtrim(number_format(abs($totalDiffPct), 2, ',', '.'), '0'), ',') . '%';
+                @endphp
                 <tfoot class="table-light fw-bold">
                     <tr>
-                        <td colspan="7" class="text-end">Total Dampak Nilai Finansial Selisih:</td>
+                        <td colspan="3" class="text-end">Total Keseluruhan:</td>
+                        <td class="text-center">{{ $totalSystemStock }}</td>
+                        <td class="text-center">{{ $totalPhysicalStock }}</td>
+                        <td class="text-center {{ $totalDiffUnit < 0 ? 'text-danger' : ($totalDiffUnit > 0 ? 'text-success' : 'text-dark') }}">
+                            {{ $totalDiffUnit > 0 ? '+' : '' }}{{ $totalDiffUnit }}
+                        </td>
+                        <td class="text-center {{ $totalDiffPct < 0 ? 'text-danger' : ($totalDiffPct > 0 ? 'text-success' : 'text-dark') }}">
+                            {{ $formattedTotalDiffPct }}
+                        </td>
+                        <td class="text-end">Total Dampak Nilai Selisih:</td>
                         <td class="text-end {{ $totalDiffValue < 0 ? 'text-danger' : ($totalDiffValue > 0 ? 'text-success' : 'text-dark') }}">
                             {{ $totalDiffValue > 0 ? '+' : '' }}Rp {{ number_format($totalDiffValue, 0, ',', '.') }}
                         </td>

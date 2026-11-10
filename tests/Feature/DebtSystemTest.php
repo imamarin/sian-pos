@@ -1014,6 +1014,53 @@ class DebtSystemTest extends TestCase
         // Platinum should no longer resolve to price_platinum, fallback to selling_price
         $this->assertEquals(20000.0, $product->getPriceForLevel('platinum'));
     }
+
+    public function test_stock_opname_displays_difference_percentage_column(): void
+    {
+        $admin = User::where('username', 'admin')->first();
+        $products = Product::take(2)->get();
+
+        $p1 = $products[0];
+        $p2 = $products[1];
+
+        $p1->update(['stock' => 100, 'cost_price' => 10000]);
+        $p2->update(['stock' => 50, 'cost_price' => 20000]);
+
+        // Submit stock opname:
+        // p1: system 100 -> physical 95 => diff -5 (-5%)
+        // p2: system 50  -> physical 55 => diff +5 (+10%)
+        $this->actingAs($admin)->post(route('stock-opnames.store'), [
+            'opname_date' => now()->format('Y-m-d'),
+            'notes' => 'Test persentase opname',
+            'items' => [
+                ['product_id' => $p1->id, 'physical_stock' => 95, 'notes' => 'Kurang 5'],
+                ['product_id' => $p2->id, 'physical_stock' => 55, 'notes' => 'Lebih 5'],
+            ],
+        ])->assertRedirect(route('stock-opnames.index'));
+
+        $opname = \App\Models\StockOpname::latest('id')->first();
+        $this->assertNotNull($opname);
+
+        $det1 = $opname->details()->where('product_id', $p1->id)->first();
+        $det2 = $opname->details()->where('product_id', $p2->id)->first();
+
+        $this->assertEquals(-5.0, $det1->difference_percentage);
+        $this->assertEquals('-5%', $det1->formatted_difference_percentage);
+
+        $this->assertEquals(10.0, $det2->difference_percentage);
+        $this->assertEquals('+10%', $det2->formatted_difference_percentage);
+
+        $this->actingAs($admin)->get(route('stock-opnames.show', $opname->id))
+            ->assertStatus(200)
+            ->assertSee('% Selisih')
+            ->assertSee('-5%')
+            ->assertSee('+10%');
+
+        $this->actingAs($admin)->get(route('stock-opnames.index'))
+            ->assertStatus(200)
+            ->assertSee('% Selisih');
+    }
 }
+
 
 

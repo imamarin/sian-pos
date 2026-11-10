@@ -43,9 +43,10 @@
                     <thead class="table-light small">
                         <tr>
                             <th style="min-width: 250px;">Produk</th>
-                            <th style="width: 140px;" class="text-center">Stok Sistem</th>
-                            <th style="width: 160px;" class="text-center">Stok Fisik Nyata <span class="text-danger">*</span></th>
-                            <th style="width: 140px;" class="text-center">Selisih</th>
+                            <th style="width: 130px;" class="text-center">Stok Sistem</th>
+                            <th style="width: 150px;" class="text-center">Stok Fisik Nyata <span class="text-danger">*</span></th>
+                            <th style="width: 120px;" class="text-center">Selisih</th>
+                            <th style="width: 130px;" class="text-center">% Selisih</th>
                             <th>Keterangan / Alasan Selisih</th>
                             <th style="width: 60px;" class="text-center">Aksi</th>
                         </tr>
@@ -71,6 +72,9 @@
                             </td>
                             <td class="text-center">
                                 <span class="fw-bold diff-badge badge bg-secondary">0</span>
+                            </td>
+                            <td class="text-center">
+                                <span class="fw-bold diff-pct-badge badge bg-secondary-subtle text-secondary border border-secondary-subtle">0%</span>
                             </td>
                             <td>
                                 <input type="text" name="items[0][notes]" class="form-control form-control-sm" placeholder="Hilang, rusak, dll.">
@@ -131,6 +135,9 @@
             <td class="text-center">
                 <span class="fw-bold diff-badge badge bg-secondary">0</span>
             </td>
+            <td class="text-center">
+                <span class="fw-bold diff-pct-badge badge bg-secondary-subtle text-secondary border border-secondary-subtle">0%</span>
+            </td>
             <td>
                 <input type="text" name="items[${rowIndex}][notes]" class="form-control form-control-sm" placeholder="Hilang, rusak, dll.">
             </td>
@@ -181,12 +188,34 @@
         const badge = row.querySelector('.diff-badge');
         badge.innerText = (diff > 0 ? '+' : '') + diff;
 
+        let pct = 0;
+        if (systemStock > 0) {
+            pct = (diff / systemStock) * 100;
+        } else if (physicalStock > 0) {
+            pct = 100;
+        }
+
+        const pctFormatted = Number(Math.abs(pct).toFixed(2)).toString().replace('.', ',');
+        const pctBadge = row.querySelector('.diff-pct-badge');
+
         if (diff > 0) {
             badge.className = 'fw-bold diff-badge badge bg-success';
+            if (pctBadge) {
+                pctBadge.innerText = '+' + pctFormatted + '%';
+                pctBadge.className = 'fw-bold diff-pct-badge badge bg-success-subtle text-success border border-success-subtle';
+            }
         } else if (diff < 0) {
             badge.className = 'fw-bold diff-badge badge bg-danger';
+            if (pctBadge) {
+                pctBadge.innerText = '-' + pctFormatted + '%';
+                pctBadge.className = 'fw-bold diff-pct-badge badge bg-danger-subtle text-danger border border-danger-subtle';
+            }
         } else {
             badge.className = 'fw-bold diff-badge badge bg-secondary';
+            if (pctBadge) {
+                pctBadge.innerText = '0%';
+                pctBadge.className = 'fw-bold diff-pct-badge badge bg-secondary-subtle text-secondary border border-secondary-subtle';
+            }
         }
     }
 </script>
